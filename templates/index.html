@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Sewing Plan Analysis</title>
+    <link rel="stylesheet" href="static/style.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/choices.js/public/assets/styles/choices.min.css">
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+    <style>
+        /* Ensure Choices.js dropdown menu is above the table */
+        .choices__list--dropdown, .choices__list[aria-expanded] {
+            z-index: 1000 !important;
+        }
+        /* Make dropdown filters match the date filter style and allow vertical stretching */
+        .filter-group .choices, .filter-group select {
+            padding: 0;
+            border: 1px solid #ccc !important;
+            border-radius: 4px !important;
+            font-size: 1em !important;
+            min-width: 160px;
+            box-sizing: border-box;
+            background: #FFFFFF !important;
+            height: auto !important;
+            min-height: 40px;
+        }
+        /* Remove extra shadow and background from Choices.js */
+        .filter-group .choices {
+            box-shadow: none !important;
+            background: #FFFFFF !important;
+        }
+        /* Vertically stretch Choices.js input and selected items */
+        .choices__inner {
+            min-height: 43px !important;
+            height: auto !important;
+            display: flex !important;
+            flex-wrap: wrap !important;
+            align-items: flex-start !important;
+            background: #FFFFFF !important;
+        }
+        /* --- FIX: Prevent selected choices from wrapping too early, but allow wrapping if needed --- */
+        .choices__list--multiple {
+            display: flex !important;
+            flex-wrap: wrap !important;
+            gap: 4px;
+            align-items: center;
+            /* Remove width: 100% so it only takes needed space */
+            /* width: 100%; */
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        .choices__list--multiple .choices__item {
+            flex: 0 1 auto !important; /* Allow shrinking/growing */
+            max-width: 180px;
+            min-width: 0;
+            border-radius: 3px !important;
+            background: #68A4DA;
+            font-size: 0.85em !important;
+            font-weight: normal !important;
+            display: flex !important;
+            align-items: center !important;
+            overflow: hidden !important;
+            margin-right: 2px;
+        }
+        .choices__list--multiple .choices__item .choices__item__text {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .choices__list--multiple .choices__item .choices__button {
+            display: inline-block !important;
+            flex: 0 0 auto;
+            margin-left: 4px;
+            align-self: center;
+        }
+        /* --- FIX: Make input field use remaining space --- */
+        .choices__input {
+            flex: 1 1 60px !important;
+            min-width: 40px !important;
+            width: auto !important;
+            background: #FFFFFF !important;
+            display: inline-block !important; /* Prevent block-level wrapping */
+            vertical-align: middle !important;
+        }
+        .choices__input--cloned {
+            display: inline-block !important;
+            width: 1px !important;
+            min-width: 0 !important;
+            padding: 0 !important;
+            border: none !important;
+            background: transparent !important;
+            vertical-align: middle !important;
+        }
+        .filter-control {
+            width: 100%;
+            display: block;
+        }
+        .filter-control .choices,
+        .filter-control select,
+        .filter-control input[type="date"] {
+            width: 100% !important;
+            box-sizing: border-box;
+        }
+        #pivotTableContainer {
+            position: relative;
+        }
+        .table-loading-overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(255,255,255,0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            pointer-events: none;
+        }
+        .table-loading-overlay .loading-spinner {
+            width: 48px;
+            height: 48px;
+            border: 6px solid #eee;
+            border-top: 6px solid #68A4DA;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            background: transparent;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg);}
+            100% { transform: rotate(360deg);}
+        }
+        /* Modal styles */
+        .modal-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.3);
+            z-index: 10000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-content {
+            background: #fff;
+            border-radius: 8px;
+            padding: 24px 18px 18px 18px;
+            min-width: 340px;
+            max-width: 90vw;
+            max-height: 80vh;
+            overflow: auto;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.18);
+            position: relative;
+        }
+        .modal-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            margin-top: 10px;
+            font-size: 0.95em;
+        }
+        .modal-table th, .modal-table td {
+            border: 1px solid #ccc;
+            border-left: none;
+            border-top: none;
+            padding: 4px 8px;
+            text-align: left;
+            background: #fff;
+            white-space: nowrap;
+            max-width: 140px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .modal-table th:first-child, .modal-table td:first-child {
+            border-left: 1px solid #ccc;
+        }
+        .modal-table tr:first-child th, .modal-table tr:first-child td {
+            border-top: 1px solid #ccc;
+        }
+        .modal-table th {
+            background: #f3f3f3;
+            font-weight: bold;
+        }
+        /* --- Add/Move these color classes at the end of <style> for higher specificity --- */
+        .cell-row-delay { background: #fee2e2 !important; color: #111 !important; }
+        .cell-row-can-delay { background: #fef9c3 !important; color: #111 !important; }
+        .cell-row-too-early { background: #e0e7ff !important; color: #111 !important; }
+        .cell-row-ok { background: #dcfce7 !important; color: #111 !important; }
+
+        /* Darker grid for pivot table */
+        #pivotTable {
+            border-collapse: collapse;
+        }
+        #pivotTable th, #pivotTable td {
+            border: 1px solid #cecece !important;
+            padding: 2px 6px !important;
+            font-size: 0.8em !important;
+            min-width: 60px !important;
+            max-width: 60px !important;
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+        }
+        #pivotTable th {
+            background: #7fb4e3 !important;
+            color: #fff !important;
+            font-weight: bold;
+        }
+        #pivotTable td.date-col {
+            color: #111;
+        }
+        #pivotTable td.date-col:hover {
+            transition: box-shadow 0.05s;
+            box-shadow: inset 0 0 0 2px #68A4DA;
+        }
+
+        /* Toggle switch styles */
+        .toggle-switch {
+            user-select: none;
+            position: relative;
+        }
+        .toggle-switch .slider {
+            width: 38px;
+            height: 22px;
+            background: #ccc;
+            border-radius: 22px;
+            position: relative;
+            transition: background 0.2s;
+            display: inline-block;
+            vertical-align: middle;
+        }
+        .toggle-switch .slider:before {
+            content: "";
+            position: absolute;
+            left: 3px;
+            top: 3px;
+            width: 16px;
+            height: 16px;
+            background: #fff;
+            border-radius: 50%;
+            transition: transform 0.2s;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        .toggle-switch input[type="checkbox"]:checked + .slider {
+            background: #68A4DA;
+        }
+        .toggle-switch input[type="checkbox"]:checked + .slider:before {
+            transform: translateX(16px);
+        }
+
+        /* Custom Export to Excel button style */
+        #exportExcelBtn {
+            background: #219a0b;
+            color: #fff;
+            border: none;
+            border-radius: 7px;
+            font-size: 15px;
+            font-weight: 600;
+            padding: 0 18px;
+            height: 38px;
+            margin-right: 18px;
+            box-shadow: 0 2px 8px rgba(37,99,235,0.08);
+            cursor: pointer;
+            transition: background 0.18s, box-shadow 0.18s;
+            letter-spacing: 0.5px;
+        }
+        #exportExcelBtn:hover, #exportExcelBtn:focus {
+            background: #18b616;
+            box-shadow: 0 4px 16px rgba(37,99,235,0.18);
+        }
+        /* Custom expand/collapse button style */
+        .expand-collapse-btn {
+            background: #f3f4f6;
+            color: #2563eb;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            padding: 2px 14px;
+            margin-top: 6px;
+            margin-bottom: 2px;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+            box-shadow: 0 1px 4px rgba(37,99,235,0.06);
+            outline: none;
+        }
+        .expand-collapse-btn:hover, .expand-collapse-btn:focus {
+            background: #e0e7ff;
+            color: #1e293b;
+        }
+        .checkbox-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 150px;
+            max-width: 150px;
+            height: 42px;
+            margin-left: 18px;
+            border-radius: 6px;
+            border: 1px solid #d1d5db;
+            background: #f8fafc;
+            box-sizing: border-box;
+            padding: 0 10px;
+            gap: 10px;
+        }
+        .checkbox-container input[type="checkbox"] {
+            width: 22px;
+            height: 22px;
+            accent-color: #2563eb;
+            margin: 0;
+            vertical-align: middle;
+        }
+        .checkbox-container label,
+        .checkbox-container label.by-subprocess-label {
+            flex: 1 1 auto;
+            text-align: center;
+            font-size: 1em;
+            font-weight: 500;
+            margin: 0;
+            line-height: 1.2;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            cursor: pointer;
+        }
+        /* Hover effect for By subprocess label only */
+        .checkbox-container label.by-subprocess-label:hover {
+            background: #e0e7ff;
+            color: #2563eb;
+            border-radius: 5px;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        /* --- Additions for line selection modal --- */
+        #lineModal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 10001;
+            align-items: center;
+            justify-content: center;
+        }
+        #lineModal .modal-content {
+            background: #fff;
+            border-radius: 8px;
+            padding: 24px;
+            min-width: 320px;
+            max-width: 90vw;
+            max-height: 80vh;
+            overflow: auto;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.18);
+            position: relative;
+        }
+        #lineModal label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 0.95em;
+        }
+        #lineModal button {
+            background: #219a0b;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            padding: 8px 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.18s;
+        }
+        #lineModal button:hover {
+            background: #18b616;
+        }
+    </style>
+</head>
+<body>
+    <div class="header-bar" style="display:flex;align-items:center;">
+        <div class="logo-container">
+            <img src="static/logo.png" alt="Logo" style="height:54px;width:auto;display:inline-block;vertical-align:middle;">
+        </div>
+        <h1 class="header-title" style="margin:0 0 0 16px;font-size:1.2em;flex:1;">Sewing Plan Analysis</h1>
+        <!-- Reduce margin/padding for date range -->
+        <div class="header-date-select" style="display:flex;align-items:center;gap:8px;margin:0 4px 0 4px;">
+            <label style="font-weight:bold;margin:0 2px 0 0;">Date from:</label>
+            <input type="date" id="dateStart" style="height:28px;min-width:100px;margin:0 2px;">
+            <label style="font-weight:bold;margin:0 2px;">to</label>
+            <input type="date" id="dateEnd" style="height:28px;min-width:100px;margin:0 2px;">
+        </div>
+        <!-- Remove arrow button here -->
+    </div>
+    <div class="outer-wrap">
+        <div class="filters-outer">
+            <div class="filters-container">
+                <div class="header-filters" style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px;">
+                    <div class="filter-row" style="display: flex; flex-wrap: nowrap; gap: 10px; width: 100%;">
+                        <!-- Reordered filters: so, style ref, customer, product type, color fc, sub no -->
+                         <div class="filter-group">
+                            <label><b>Factory:</b></label>
+                            <div class="filter-control">
+                                <select id="factorySelect" multiple></select>
+                            </div>
+                        </div>
+                        <div class="filter-group">
+                            <label for="soNoDocSelect"><b>SO No Doc:</b></label>
+                            <div class="filter-control">
+                                <select id="soNoDocSelect" multiple></select>
+                            </div>
+                        </div>
+                        <div class="filter-group">
+                            <label><b>Style Ref:</b></label>
+                            <div class="filter-control">
+                                <select id="styleRefSelect" multiple></select>
+                            </div>
+                        </div>
+                        <div class="filter-group">
+                            <label><b>Customer:</b></label>
+                            <div class="filter-control">
+                                <select id="customerNameSelect" multiple></select>
+                            </div>
+                        </div>
+                        <div class="filter-group">
+                            <label><b>Product Type:</b></label>
+                            <div class="filter-control">
+                                <select id="productTypeSelect" multiple></select>
+                            </div>
+                        </div>
+                        <div class="filter-group">
+                            <label><b>Color FC:</b></label>
+                            <div class="filter-control">
+                                <select id="colorFcSelect" multiple></select>
+                            </div>
+                        </div>
+                        <div class="filter-group">
+                            <label><b>Sub No:</b></label>
+                            <div class="filter-control">
+                                <select id="subNoSelect" multiple></select>
+                            </div>
+                        </div>
+                        <div class="filter-group" style="display: flex; align-items: center;">
+                            <button id="resetFiltersBtn" type="button" style="height: 43px;">Reset Filters</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="container">
+            <div style="margin-bottom:10px; margin-left: 24px; display: flex; align-items: center;">
+                <!-- Group by selector on the left -->
+                <label>
+                    Group by:
+                    <select id="groupBySelect" style="height:32px;min-width:90px;">
+                        <option value="day">Day</option>
+                        <option value="week">Week</option>
+                        <option value="month">Month</option>
+                    </select>
+                </label>
+                <!-- ...existing code for checkboxes ... -->
+                <div class="checkbox-container">
+                    <input type="checkbox" id="toggleSamIeCalc">
+                    <label for="toggleSamIeCalc" style="margin:0;">By Minutes</label>
+                </div>
+                <div class="checkbox-container">
+                    <input type="checkbox" id="toggleCellColors">
+                    <label for="toggleCellColors" style="margin:0;">By Delay</label>
+                </div>
+                <div class="checkbox-container">
+                    <input type="checkbox" id="toggleStyleColors">
+                    <label for="toggleStyleColors" style="margin:0;">By Style</label>
+                </div>
+                <div class="checkbox-container">
+                    <input type="checkbox" id="toggleSubprocess">
+                    <label for="toggleSubprocess" class="by-subprocess-label" id="showBySubprocessLabel" style="margin:0;">Subprocess</label>
+                </div>
+                <div class="checkbox-container">
+                    <input type="checkbox" id="togglePoints" disabled>
+                    <label for="togglePoints" style="margin:0;">By Points</label>
+                </div>
+                <!-- Toggle switch on the right -->
+                <div style="margin-left:auto; display:flex; align-items:center;">
+                    <button id="exportExcelBtn" type="button">Export to Excel</button>
+                    <label class="toggle-switch" style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-right: 24px;">
+                        <span id="toggleViewLabel" style="font-size:1em;">Table</span>
+                        <input type="checkbox" id="toggleView" style="display:none;">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+            <div id="pivotTableScroll" style="overflow-x:auto; position:relative;">
+                <div id="pivotTableContainer">
+                    <div class="loading-spinner"></div>
+                </div>
+            </div>
+            <!-- Graph container: moderate height and padding -->
+            <div id="graphContainer" style="display:none;padding:12px 8px 0 8px;">
+                <canvas id="planPcsChart" height="600"></canvas>
+            </div>
+        </div>
+    </div>
+    <!-- Modal HTML -->
+    <div id="cellDetailModal" class="modal-overlay">
+        <div class="modal-content">
+            <div id="cellDetailModalBody"></div>
+        </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/choices.js/public/assets/scripts/choices.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="static/main.js"></script>
+    <!-- Export to Excel logic and handler -->
+    <script>
+    // --- Export utility ---
+    function formatDateHeader(dateStr, groupBy) {
+        const d = new Date(dateStr);
+        if (groupBy === 'day') {
+            if (!isNaN(d)) {
+                return d.toLocaleString('en-US', { month: 'short' }) + '-' + String(d.getDate()).padStart(2, '0');
+            }
+            return dateStr;
+        } else if (groupBy === 'month') {
+            const [year, month] = dateStr.split('-');
+            if (year && month) {
+                const m = new Date(year, Number(month) - 1, 1);
+                return year + '-' + m.toLocaleString('en-US', { month: 'short' });
+            }
+            return dateStr;
+        } else if (groupBy === 'week') {
+            return dateStr;
+        }
+        return dateStr;
+    }
+    function getExportOptionStates() {
+        // Get checkbox states and groupBy
+        const byMinutes = document.getElementById('toggleSamIeCalc')?.checked ? 'Yes' : 'No';
+        const byDelay = document.getElementById('toggleCellColors')?.checked ? 'Yes' : 'No';
+        const byStyle = document.getElementById('toggleStyleColors')?.checked ? 'Yes' : 'No';
+        const bySubprocess = document.getElementById('toggleSubprocess')?.checked ? 'Yes' : 'No';
+        const byPoints = document.getElementById('togglePoints')?.checked ? 'Yes' : 'No';
+        const groupBy = (window.groupBy || 'day');
+        // Subprocess selection
+        let subprocesses = [];
+        if (bySubprocess === 'Yes') {
+            const form = document.getElementById('subprocessForm');
+            if (form) {
+                subprocesses = Array.from(form.elements)
+                    .filter(el => el.type === 'checkbox' && el.checked)
+                    .map(el => el.value);
+            } else if (window.selectedSubprocesses) {
+                subprocesses = window.selectedSubprocesses;
+            }
+        }
+        return {
+            byMinutes,
+            byDelay,
+            byStyle,
+            bySubprocess,
+            byPoints,
+            groupBy,
+            subprocesses: subprocesses && subprocesses.length ? subprocesses.join(', ') : ''
+        };
+    }
+    function exportPivotTableToExcel({ filteredData, groupBy, filters, tableData, dateHeaders }) {
+        const wsData = [];
+        const opts = getExportOptionStates();
+        const today = new Date();
+        const todayStr = today.toISOString().slice(0,10);
+
+        // --- If By Delay is checked, export grouped summary ---
+        if (opts.byDelay === 'Yes') {
+            wsData.push([
+                'Factory',
+                'Line',
+                'SO No',
+                'Customer',
+                'Style Ref',
+                'Sub No',
+                'Color FC',
+                'SAM',
+                'Delay Status',
+                'Earliest Start SEW',
+                'Max End SEW',
+                'Delivery',
+                'PCS',
+                'Order'
+            ]);
+            function excelDate(dt) {
+                // Converts JS Date to Excel date value (days since 1899-12-30)
+                if (!dt) return '';
+                const d = new Date(dt);
+                if (isNaN(d)) return '';
+                return Math.floor((d - new Date(Date.UTC(1899, 11, 30))) / (1000 * 60 * 60 * 24));
+            }
+            // --- Fetch order_qty map and continue export ---
+            fetch('/api/order_qty_map')
+                .then(res => res.json())
+                .then(orderQtyMap => {
+                    const groupMap = {};
+                    const selectedStatuses = window.selectedDelayStatuses || ['Delay', 'Can be delay', 'Too early', 'Ok'];
+                    filteredData.forEach(row => {
+                        const factory = row.FACTORY || row.factory || '';
+                        const line = row.PROD_LINE || row.prod_line || '';
+                        const soNo = row.SO_NO_DOC || row.so_no_doc || '';
+                        const customer = row.CUSTOMER_NAME || row.customer_name || '';
+                        const styleRef = row.STYLE_REF || row.style_ref || '';
+                        const subNo = row.SUB_NO || row.sub_no || '';
+                        const colorFc = row.COLOR_FC || row.color_fc || '';
+                        const samIe = row.SAM_IE || row.sam_ie || '';
+                        const sew = row.SEW_DATE || row.sew_date || '';
+                        const pcs = Number(row.PLAN_PCS || row.plan_pcs) || 0;
+                        const delivery = row.DELIVERY_DATE || row.delivery_date || '';
+                        // --- Use order_qty from FR_IMPORT_DATA_CENTER with color_fc ---
+                        const keyQty = `${soNo}||${subNo}||${colorFc}`;
+                        const orderQty = orderQtyMap[keyQty] !== undefined ? Number(orderQtyMap[keyQty]) : null;
+                        const orderPlan = orderQty !== null ? orderQty : Number(row.ORDER_PLAN || row.order_plan) || 0;
+                        const startSew = row.START_SEW || row.start_sew || '';
+                        // Determine delay status
+                        let status = '';
+                        const dDate = new Date(delivery);
+                        const sDate = new Date(sew);
+                        if (!isNaN(dDate) && !isNaN(sDate)) {
+                            const diff = Math.floor((dDate - sDate) / (1000 * 60 * 60 * 24));
+                            if (diff < 0) status = 'Delay';
+                            else if (diff < 4 && diff > 0) status = 'Can be delay';
+                            else if (diff > 20) status = 'Too early';
+                            else status = 'Ok';
+                        }
+                        if (!selectedStatuses.includes(status)) return;
+                        // Group by all requested fields
+                        const key = [factory, line, soNo, customer, styleRef, subNo, colorFc, samIe, status, delivery].join('||');
+                        if (!groupMap[key]) {
+                            groupMap[key] = {
+                                factory,
+                                line,
+                                soNo,
+                                customer,
+                                styleRef,
+                                subNo,
+                                colorFc,
+                                samIe,
+                                status,
+                                delivery,
+                                maxSew: sew,
+                                sumPcs: pcs,
+                                maxOrderPlan: orderPlan,
+                                earliestStartSew: startSew && !isNaN(new Date(startSew)) ? startSew : ''
+                            };
+                        } else {
+                            // Update maxSew if this row's sew date is later
+                            if (sew && groupMap[key].maxSew) {
+                                const prev = new Date(groupMap[key].maxSew);
+                                const curr = new Date(sew);
+                                if (!isNaN(curr) && !isNaN(prev) && curr > prev) {
+                                    groupMap[key].maxSew = sew;
+                                }
+                            }
+                            groupMap[key].sumPcs += pcs;
+                            // Update maxOrderPlan if this row's orderPlan is greater
+                            if (orderPlan > groupMap[key].maxOrderPlan) {
+                                groupMap[key].maxOrderPlan = orderPlan;
+                            }
+                            // Update earliestStartSew if this row's startSew is earlier
+                            if (startSew && !isNaN(new Date(startSew))) {
+                                if (!groupMap[key].earliestStartSew || new Date(startSew) < new Date(groupMap[key].earliestStartSew)) {
+                                    groupMap[key].earliestStartSew = startSew;
+                                }
+                            }
+                        }
+                    });
+                    // --- Log 5 matched and 5 unmatched keys ---
+                    const allKeys = Object.values(groupMap).map(g => `${g.soNo}||${g.subNo}||${g.colorFc}`);
+                    const matchedKeys = allKeys.filter(k => orderQtyMap[k] !== undefined).slice(0, 5);
+                    const unmatchedKeys = allKeys.filter(k => orderQtyMap[k] === undefined).slice(0, 5);
+                    console.log('Matched keys (first 5):', matchedKeys);
+                    console.log('Unmatched keys (first 5):', unmatchedKeys);
+
+                    Object.values(groupMap).forEach(g => {
+                        wsData.push([
+                            g.factory,
+                            g.line,
+                            g.soNo,
+                            g.customer,
+                            g.styleRef,
+                            g.subNo,
+                            g.colorFc,
+                            g.samIe,
+                            g.status,
+                            excelDate(g.earliestStartSew),
+                            excelDate(g.maxSew),
+                            excelDate(g.delivery),
+                            g.sumPcs,
+                            g.maxOrderPlan
+                        ]);
+                    });
+
+                    const ws = XLSX.utils.aoa_to_sheet(wsData);
+                    const dateCols = {};
+                    wsData[0].forEach((header, idx) => {
+                        if (["Earliest Start SEW", "Max End SEW", "Delivery"].includes(header)) {
+                            dateCols[idx] = true;
+                        }
+                    });
+
+                    for (let i = 1; i < wsData.length; i++) {
+                        for (const col in dateCols) {
+                            const val = wsData[i][col];
+                            if (typeof val === 'number' && val > 0) {
+                                const cellRef = XLSX.utils.encode_cell({ r: i, c: parseInt(col) });
+                                ws[cellRef].t = 'n';
+                                ws[cellRef].z = 'yyyy-mm-dd';
+                            }
+                        }
+                    }
+                    const wb = XLSX.utils.book_new();
+                    XLSX.utils.book_append_sheet(wb, ws, "PivotTable");
+                    XLSX.writeFile(wb, `Sewing_Plan_${todayStr}.xlsx`);
+                })
+                .catch(err => {
+                    alert('Failed to fetch order_qty for export: ' + err);
+                });
+            return; // Prevent normal export logic
+        }
+        // Second row: column headers
+        const headerRow = ['Line/Group'].concat(dateHeaders.map(d => formatDateHeader(d, groupBy)));
+        wsData.push(headerRow);
+
+        // --- Add Total and Line count rows from the table ---
+        const table = document.getElementById('pivotTable');
+        if (table) {
+            const theadRows = Array.from(table.querySelectorAll('thead tr'));
+            for (let i = 0; i < 2; i++) {
+                const tr = theadRows[i];
+                if (!tr) continue;
+                const tds = Array.from(tr.querySelectorAll('th,td'));
+                const rowArr = tds.map((td, idx) => {
+                    let val = td.innerText.trim();
+                    if (idx > 0 && val !== '') {
+                        const num = Number(val.replace(/,/g, ''));
+                        return isNaN(num) ? val : num;
+                    }
+                    return val;
+                });
+                wsData.push(rowArr);
+            }
+        }
+
+        tableData.forEach(row => {
+            const arr = [row.rowLabel];
+            dateHeaders.forEach(d => {
+                let val = row[d] || '';
+                if (val !== '' && !isNaN(Number(val.replace(/,/g, '')))) {
+                    arr.push(Number(val.replace(/,/g, '')));
+                } else {
+                    arr.push(val);
+                }
+            });
+            wsData.push(arr);
+        });
+        const ws = XLSX.utils.aoa_to_sheet(wsData);
+        // Set date columns to Excel date type
+        if (opts.byDelay === 'Yes') {
+            // Earliest Start SEW: col 8, Max End SEW: col 9, Delivery: col 10 (0-based)
+            for (let i = 1; i < wsData.length; i++) {
+                for (const col of [9, 10, 11]) {
+                    const val = wsData[i][col];
+                    if (typeof val === 'number' && val > 0) {
+                        const cellRef = XLSX.utils.encode_cell({ r: i, c: col });
+                        ws[cellRef].t = 'n'; // number
+                        ws[cellRef].z = 'yyyy-mm-dd';
+                    }
+                }
+            }
+        }
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "PivotTable");
+        XLSX.writeFile(wb, `Sewing_Plan_${todayStr}.xlsx`);
+    }
+    // --- Export button handler ---
+    document.addEventListener('DOMContentLoaded', function() {
+        const exportBtn = document.getElementById('exportExcelBtn');
+        if (exportBtn) {
+            exportBtn.addEventListener('click', function() {
+                // Gather current filter values
+                if (typeof getCurrentFilters !== 'function') {
+                    alert('Export not available: getCurrentFilters missing.');
+                    return;
+                }
+                const filters = getCurrentFilters();
+                const filteredData = window._lastFilteredData || [];
+                const groupBy = window.groupBy || 'day';
+                const dateHeaders = window._pivotTableDisplayDates || [];
+                // Build tableData from rendered table
+                const table = document.getElementById('pivotTable');
+                if (!table) {
+                    alert('No table to export.');
+                    return;
+                }
+                const rows = Array.from(table.querySelectorAll('tbody tr'));
+                const tableData = rows.map(tr => {
+                    const tds = tr.querySelectorAll('td');
+                    if (!tds.length) return null;
+                    const rowLabel = tds[0].innerText.trim();
+                    const rowObj = { rowLabel };
+                    dateHeaders.forEach((date, i) => {
+                        rowObj[date] = tds[i + 1] ? tds[i + 1].innerText.trim() : '';
+                    });
+                    return rowObj;
+                }).filter(Boolean);
+                exportPivotTableToExcel({
+                    filteredData,
+                    groupBy,
+                    filters,
+                    tableData,
+                    dateHeaders
+                });
+            });
+        }
+    });
+    </script>
+</body>
+</html>

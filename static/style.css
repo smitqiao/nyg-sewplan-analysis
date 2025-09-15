@@ -1,0 +1,429 @@
+html {
+    box-sizing: border-box;
+}
+*, *:before, *:after {
+    box-sizing: inherit;
+}
+
+body {
+    font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+    background: #f7fafc;
+    margin: 0;
+    padding: 80px 0 40px 0;
+    color: #222;
+    min-height: 100vh;
+    width: 100vw;
+    overflow-x: hidden;
+}
+
+.outer-wrap {
+    width: 100%;
+    max-width: 1670px;
+    margin: 0 auto;
+    padding-left: 16px;
+    padding-right: 16px;
+}
+
+.filters-outer {
+    width: 100%;
+    /* Remove max-width, margin, and horizontal padding */
+    max-width: none;
+    margin: 0;
+    padding-left: 0;
+    padding-right: 0;
+}
+
+.filters-container {
+    margin-top: 4px;      /* reduced top margin */
+    margin-bottom: 12px;  /* keep bottom margin as before */
+    padding: 16px 16px;
+    background: #F9FAFB;
+    border: 1.5px solid #e5e7eb;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(37,99,235,0.04);
+    min-height: 72px;
+    height: auto;
+    display: flex;
+    align-items: flex-start;
+    flex-direction: column;
+    justify-content: flex-start;
+}
+
+.header-filters {
+    flex-direction: column;
+    gap: 0;
+    width: 100%;
+}
+
+.filter-row {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 10px;
+    align-items: flex-end;
+    margin-bottom: 0;
+    width: 100%;
+    justify-content: flex-start;
+}
+
+.filter-group {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+.header-filters label {
+    margin-bottom: 0;
+    margin-right: 2px;
+    display: flex;
+    align-items: center;
+    height: 32px;
+    min-width: 90px;
+}
+
+.header-filters select,
+.header-filters input[type="date"] {
+    width: 140px;      /* Fixed width for all filter controls */
+    min-width: 100px;
+    max-width: 180px;
+    box-sizing: border-box;
+    vertical-align: middle;
+    height: 32px;
+    line-height: 32px;
+    margin-bottom: 0;
+}
+
+.filter-group label {
+    width: 100%;
+    text-align: left;
+    margin-bottom: 1px; /* less margin between label and input */
+    display: block;
+    font-variant-numeric: tabular-nums; /* Ensures : aligns */
+}
+
+.filter-group select,
+.filter-group input[type="date"] {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    height: 32px;
+    line-height: 32px;
+    margin-bottom: 0;
+}
+
+#resetFiltersBtn {
+    min-width: 100px;
+    padding: 6px 10px;
+    font-size: 14px;
+    margin-left: 0;
+    margin-right: 0;
+    height: 32px;
+    width: 100%;
+    background: #6b7280;
+    color: #fff;
+    border: none;
+    border-radius: 7px;
+    cursor: pointer;
+    transition: background 0.15s;
+    font-weight: bold; /* Make text bold */
+}
+
+#resetFiltersBtn:hover, #resetFiltersBtn:focus {
+    background: #4b5563;
+}
+
+.container {
+    width: 100%;
+    /* Remove max-width, margin, and horizontal padding */
+    max-width: none;
+    margin: 0;
+    padding-left: 0;
+    padding-right: 0;
+    padding-top: 24px;
+    padding-bottom: 24px;
+    background: #F9FAFB;
+    border: 1.5px solid #e5e7eb;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(37,99,235,0.04);
+    color: #222;
+}
+
+.header-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    background: #68A4DA;
+    color: #fff;
+    padding: 0 20px;
+    font-size: 1.8em;
+    font-weight: 700;
+    box-shadow: 0 2px 8px rgba(42, 125, 225, 0.15);
+    height: 72px;
+    display: flex;
+    align-items: center;
+    z-index: 20;
+    overflow: hidden;
+}
+
+.logo-container {
+    display: flex;
+    align-items: center;
+    white-space: nowrap;
+    flex-shrink: 0;
+    width: 50px;
+}
+
+.header-title {
+    margin: 0 0 0 16px;
+    font-size: 1.2em;
+    font-weight: 700;
+    color: #fff;
+    text-align: left;
+    flex: 1;
+    display: block;
+}
+
+#pivotTableScroll {
+    overflow-x: auto;
+    margin: 0 16px;
+}
+
+#pivotTable {
+    border-collapse: collapse;
+    width: 100%;
+    margin-top: 6px; /* Reduced from 36px */
+    background: #fff;
+    box-shadow: 0 2px 8px rgba(37,99,235,0.05);
+    table-layout: auto;
+    /* Add this to ensure column widths are respected */
+}
+
+#pivotTable col:first-child {
+    width: 110px !important;
+    min-width: 110px !important;
+    max-width: 110px !important;
+}
+
+#pivotTable th, #pivotTable td {
+    border: 1px solid #e5e7eb;
+    padding: 10px 14px;
+    text-align: center;
+    font-size: 15px;
+    white-space: nowrap;
+    color: #222;
+    min-width: 38.76px;
+    /* Remove background here if present, so row striping is visible */
+}
+
+#pivotTable tbody tr:nth-child(odd) {
+    background: #eff6ff;
+}
+#pivotTable tbody tr:nth-child(even) {
+    background: #dbeafe;
+}
+
+#pivotTable tbody tr:nth-child(odd) td:first-child,
+#pivotTable tbody tr:nth-child(odd) th:first-child {
+    background: #f7f9fb;
+}
+#pivotTable tbody tr:nth-child(even) td:first-child,
+#pivotTable tbody tr:nth-child(even) th:first-child {
+    background: #e6e9ed;
+}
+
+#pivotTable th:first-child,
+#pivotTable td:first-child {
+    text-align: center;
+    font-weight: 500;
+    position: sticky;
+    left: 0;
+    z-index: 4; /* Highest: top-left cell always in front */
+    background: #f1f5f9;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 12px;
+    padding-left: 8px;
+    padding-right: 8px;
+}
+
+#pivotTable th.date-col, #pivotTable td.date-col {
+    /* Remove min-width, max-width, width so date columns auto-size */
+    font-size: 12px;
+    color: #64748b;
+    padding-left: 6px;
+    padding-right: 6px;
+}
+
+#pivotTable th {
+    background: #f3f4f6;
+    color: #1e293b;
+    text-align: center;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    box-shadow: 0 2px 8px rgba(37,99,235,0.10);
+}
+
+#pivotTable td:first-child, #pivotTable th:first-child {
+    text-align: center;
+    font-weight: 500;
+    background: #f1f5f9;
+    white-space: normal;
+}
+
+/* Lower z-index for date header cells so they appear under the sticky first column */
+#pivotTable th.date-col {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    /* ...existing code... */
+}
+
+/* All other th (not first-child) */
+#pivotTable th:not(:first-child):not(.date-col) {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    /* ...existing code... */
+}
+
+label {
+    color: #1e293b;
+    font-size: 15px;
+    font-weight: 500;
+}
+
+input[type="date"], select {
+    padding: 6px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    font-size: 15px;
+    margin-left: 4px;
+    margin-right: 12px;
+    background: #f8fafc;
+    transition: border-color 0.2s, background 0.2s;
+    color: #222;
+}
+
+input[type="date"]:focus, select:focus {
+    outline: none;
+    border-color: #2563eb;
+    background: #fff;
+}
+
+.loading-spinner {
+    margin: 40px auto;
+    border: 6px solid #e5e7eb;
+    border-top: 6px solid #2563eb;
+    border-radius: 50%;
+    width: 44px;
+    height: 44px;
+    animation: spin 1s linear infinite;
+    display: block;
+}
+@keyframes spin {
+    0% { transform: rotate(0deg);}
+    100% { transform: rotate(360deg);}
+}
+
+@media (max-width: 1200px) {
+    .filter-row {
+        flex-wrap: wrap;
+    }
+    .filter-group {
+        flex: 1 1 48%;
+        min-width: 120px;
+        max-width: 100%;
+    }
+}
+
+@media (max-width: 900px) {
+    .container, .filters-outer {
+        max-width: 100%;
+        margin: 0 auto;
+        padding-left: 4px;
+        padding-right: 4px;
+    }
+    .filters-container {
+        padding: 0 2px;
+    }
+    .header-bar {
+        flex-direction: column;
+        align-items: stretch;
+        height: auto;
+        padding-bottom: 10px;
+    }
+    .logo-container {
+        width: 100%;
+        justify-content: center;
+        margin-bottom: 4px;
+    }
+    .header-title {
+        margin: 0 0 8px 0;
+        text-align: center;
+    }
+    .header-filters {
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 8px;
+        margin-left: 0;
+    }
+    .filter-row {
+        flex-direction: column;
+        gap: 4px;
+        width: 100%;
+    }
+    .filter-group {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        flex: 1 1 100%;
+    }
+    .header-filters select,
+    .header-filters input[type="date"] {
+        width: 100%;
+        max-width: 100%;
+    }
+    #resetFiltersBtn {
+        width: 100%;
+        margin-top: 4px;
+    }
+    #pivotTable th, #pivotTable td {
+        font-size: 13px;
+        padding: 7px 7px;
+    }
+    .container {
+        margin-left: 4px;
+        margin-right: 4px;
+    }
+    .filters-container {
+        margin-left: 4px;
+        margin-right: 4px;
+        padding: 0 2px;
+    }
+}
+
+@media (max-width: 600px) {
+    #pivotTable th, #pivotTable td {
+        font-size: 11px;
+        padding: 5px 4px;
+    }
+    input[type="date"], select {
+        font-size: 12px;
+        padding: 4px 6px;
+    }
+    .header-bar {
+        font-size: 1.1em;
+        height: auto;
+        padding: 8px 4px;
+    }
+    .logo-container {
+        width: 100%;
+        justify-content: center;
+    }
+}
