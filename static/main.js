@@ -8,6 +8,7 @@
         let factories = new Set();
         let styleRefs = new Set();
         let styleColorMap = {}; // styleRef -> color
+        let productColorMap = {}; // product type -> darker color (white text)
         let minDate = null, maxDate = null;
         let useSamIeCalc = false;
         let groupBy = 'day'; // <-- Add this line
@@ -38,6 +39,46 @@
         // Helper: get Month string (YYYY-MM)
         function getMonthString(dateObj) {
             return `${dateObj.getFullYear()}-${String(dateObj.getMonth()+1).padStart(2,'0')}`;
+        }
+
+        // --- Color helpers for efficiency coloring ---
+        // Convert hex "#rrggbb" to {r,g,b}
+        function hexToRgb(hex) {
+            hex = hex.replace('#','');
+            if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+            const int = parseInt(hex, 16);
+            return { r: (int >> 16) & 255, g: (int >> 8) & 255, b: int & 255 };
+        }
+        // Convert {r,g,b} to hex "#rrggbb"
+        function rgbToHex({r,g,b}) {
+            const toHex = v => v.toString(16).padStart(2,'0');
+            return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+        }
+        // Linear interpolate two numbers
+        function lerp(a, b, t) { return Math.round(a + (b - a) * t); }
+        // Interpolate colors (hex) by t in [0,1]
+        function interpolateColor(hexA, hexB, t) {
+            const A = hexToRgb(hexA), B = hexToRgb(hexB);
+            return rgbToHex({ r: lerp(A.r, B.r, t), g: lerp(A.g, B.g, t), b: lerp(A.b, B.b, t) });
+        }
+        // Choose text color (black/white) for contrast using relative luminance / YIQ
+        function readableTextColor(hex) {
+            const {r,g,b} = hexToRgb(hex);
+            const yiq = (r*299 + g*587 + b*114) / 1000;
+            return yiq >= 128 ? '#111' : '#fff';
+        }
+        // Map percent [0..100] to color: 0->red, 50->yellow, 100->green
+        function getEfficiencyColor(percent) {
+            const p = Math.max(0, Math.min(100, Number(percent) || 0));
+            if (p <= 50) {
+                // red -> yellow
+                const t = p / 50;
+                return interpolateColor('#ef4444', '#facc15', t);
+            } else {
+                // yellow -> green
+                const t = (p - 50) / 50;
+                return interpolateColor('#facc15', '#10b981', t);
+            }
         }
 
         function updateDateInputs() {
@@ -117,6 +158,30 @@
                     styleColorMap[style] = `hsl(${Math.floor(Math.random()*360)}, ${60 + Math.floor(Math.random()*30)}%, ${65 + Math.floor(Math.random()*20)}%)`;
                 } else {
                     styleColorMap[style] = getDistinctColor(idx, styles.length);
+                }
+            });
+        }
+
+        // Helper: generate darker product-type color variant
+        function getProductColor(idx, total) {
+            const goldenAngle = 137.508;
+            const hue = Math.floor((idx * goldenAngle) % 360);
+            // stronger saturation and darker lightness for contrast with white text
+            const sat = 70 + (idx % 3) * 8;    // 70,78,86
+            const light = 30 + (idx % 4) * 4;  // 30,34,38,42
+            return `hsl(${hue}, ${sat}%, ${light}%)`;
+        }
+
+        // Assign colors to product types (darker variants for white text)
+        function assignProductColors() {
+            productColorMap = {};
+            const products = Array.from(new Set(allData.map(row => row.PRODUCT_TYPE || row.product_type).filter(Boolean)));
+            products.forEach((pt, idx) => {
+                if (!pt) return;
+                if (products.length > 360) {
+                    productColorMap[pt] = `hsl(${Math.floor(Math.random()*360)}, ${70 + Math.floor(Math.random()*20)}%, ${30 + Math.floor(Math.random()*10)}%)`;
+                } else {
+                    productColorMap[pt] = getProductColor(idx, products.length);
                 }
             });
         }
@@ -617,7 +682,7 @@
                     const styleColorChecked = document.getElementById('toggleStyleColors')?.checked;
                     const delayColorChecked = document.getElementById('toggleCellColors')?.checked;
                     if (styleColorChecked && cellRows.length > 0) {
-                        // Only apply style color for actual style rows (S:). For product-type rows use plain label display.
+                        // Apply style colors for S: and darker product colors for P:
                         if (style.startsWith('S')) {
                             const actualStyleName = style.slice(2);
                             if (actualStyleName && styleColorMap[actualStyleName]) {
@@ -627,8 +692,16 @@
                             } else {
                                 cellValue = '';
                             }
+                        } else if (style.startsWith('P:')) {
+                            const actualProd = subLabel;
+                            if (actualProd && productColorMap[actualProd]) {
+                                cellStyle = `background:${productColorMap[actualProd]} !important;color:#fff !important;`;
+                                cellClass = 'cell-row-product-color';
+                                cellValue = actualProd;
+                            } else {
+                                cellValue = subLabel;
+                            }
                         } else {
-                            // product-type row or other: show label but no style-color
                             cellValue = subLabel;
                         }
                     } else if (delayColorChecked && cellRows.length > 0) {
@@ -683,8 +756,8 @@
         });
     } else {
         // Collapsed: render rows in order Style -> Product type -> Efficiency.
-        // Merge (rowspan) the left "line" header cell across the stacked rows for each line.
-        // Product type and Efficiency rows are only included when both selectedByStyleOptions includes them AND the "By Style" toggle is active.
+        // Product type and Efficiency rows used to require the style-color toggle to be ON.
+        // Change: respect the user's By-Style modal selections directly; default to ['Style'] if nothing selected.
         const lineBgColors = ['#ffffff', '#f7f9fb'];
         const allowedOptions = ['Style', 'Product type', 'Efficiency'];
         let lineIdx = 0;
@@ -692,15 +765,19 @@
         Object.keys(aggMap).sort().forEach(line => {
             const bg = lineBgColors[lineIdx % 2];
             // Decide rows to render for this line in requested order
-            const rowsToRender = ['Style']
-                .concat(selectedByStyleOptions.includes('Product type') ? ['Product type'] : [])
-                .concat(selectedByStyleOptions.includes('Efficiency') ? ['Efficiency'] : [])
-                // Only include Product/Eff rows if style toggle is ON
-                .filter(rt => {
-                    if ((rt === 'Product type' || rt === 'Efficiency') && !styleToggleEl?.checked) return false;
-                    return allowedOptions.includes(rt);
+            let rowsToRender = [];
+            // Only consider selectedByStyleOptions if the main "By Style" toggle is checked.
+            if (styleToggleEl && styleToggleEl.checked) {
+                ['Style', 'Product type', 'Efficiency'].forEach(opt => {
+                    if (selectedByStyleOptions.includes(opt)) rowsToRender.push(opt);
                 });
-            if (rowsToRender.length === 0) rowsToRender.push('Style');
+            } else {
+                // If By Style toggle is NOT checked, do not apply modal selections; show default Style row only.
+                rowsToRender = ['Style'];
+            }
+            if (rowsToRender.length === 0) rowsToRender = ['Style']; // fallback default
+
+            // Note: we intentionally do NOT require the style-color toggle to include Product type / Efficiency rows.
 
             // Use rowspan for merged left header cell
             const rowspan = rowsToRender.length;
@@ -805,19 +882,52 @@
                             let maxPt = '';
                             let maxPtSum = -1;
                             Object.entries(ptSums).forEach(([pt, s]) => { if (s > maxPtSum) { maxPtSum = s; maxPt = pt; } });
-                            cellValue = maxPt || '';
+                            if (document.getElementById('toggleStyleColors')?.checked && maxPt && productColorMap[maxPt]) {
+                                cellStyle = `background:${productColorMap[maxPt]} !important;color:#fff !important;`;
+                                cellClass = 'cell-row-product-color';
+                                cellValue = maxPt;
+                            } else {
+                                cellValue = maxPt || '';
+                            }
                         } else if (rowType === 'Efficiency') {
+                            // Prefer EFFICIENCY values from FR_PLANNED_EFF when available.
+                            // Compute weighted average of EFFICIENCY by PLAN_PCS if any EFFICIENCY present.
                             let pcsSum = 0;
                             let samProductSum = 0;
+                            let effWeightedSum = 0;
+                            let effHasValue = false;
                             cellRows.forEach(r => {
                                 const pcs = Number(r.PLAN_PCS || r.plan_pcs) || 0;
-                                const sam = Number(r.SAM_IE || r.sam_ie) || 0;
                                 pcsSum += pcs;
-                                samProductSum += pcs * sam;
+                                const effVal = (r.EFFICIENCY !== undefined ? r.EFFICIENCY : r.efficiency);
+                                if (effVal !== undefined && effVal !== null && effVal !== '') {
+                                    const e = Number(effVal) || 0;
+                                    effWeightedSum += e * pcs;
+                                    effHasValue = true;
+                                } else {
+                                    const sam = Number(r.SAM_IE || r.sam_ie) || 0;
+                                    samProductSum += pcs * sam;
+                                }
                             });
                             if (pcsSum > 0) {
-                                const eff = samProductSum / pcsSum;
-                                cellValue = Number.isFinite(eff) ? eff.toFixed(2) : '';
+                                let effNumber = null;
+                                if (effHasValue) {
+                                    effNumber = effWeightedSum / pcsSum;
+                                } else {
+                                    effNumber = samProductSum / pcsSum;
+                                }
+                                if (effNumber === null || !Number.isFinite(effNumber)) {
+                                    cellValue = '';
+                                } else {
+                                    // show numeric efficiency
+                                    cellValue = effNumber.toFixed(2);
+                                    // Map to 0..100 percent for coloring (if EFFICIENCY already in 0..100, use directly)
+                                    // If values seem like minutes or small, clamp heuristically; user data normally 0..100.
+                                    const percent = Math.max(0, Math.min(100, Math.round(effNumber)));
+                                    const bgHex = getEfficiencyColor(percent);
+                                    const textHex = readableTextColor(bgHex);
+                                    cellStyle = `background:${bgHex} !important;color:${textHex} !important;`;
+                                }
                             } else {
                                 cellValue = '';
                             }
@@ -827,7 +937,7 @@
                     // Delay coloring (if applicable and not already style-colored)
                     if (delayColorChecked && cellRows.length > 0 && !cellClass) {
                         const statusPriority = selectedDelayStatuses.length > 0 ? selectedDelayStatuses : ['Delay','Can be delay','Too early','Ok'];
-                        function getStatusLocal2(delivery, sew) {
+                        function getStatus(delivery, sew) {
                             const dDate = new Date(delivery);
                             const sDate = new Date(sew);
                             if (isNaN(dDate) || isNaN(sDate)) return '';
@@ -837,14 +947,14 @@
                             if (diff > 20) return 'Too early';
                             return 'Ok';
                         }
-                        const hasSelectedStatus = cellRows.some(r => selectedDelayStatuses.includes(getStatusLocal2(r.DELIVERY_DATE || r.delivery_date, r.SEW_DATE || r.sew_date)));
+                        const hasSelectedStatus = cellRows.some(r => selectedDelayStatuses.includes(getStatus(r.DELIVERY_DATE || r.delivery_date, r.SEW_DATE || r.sew_date)));
                         if (!hasSelectedStatus) {
                             cellValue = '';
-                            cellStyle = cellStyle || 'background:#CECECE !important;color:#111 !important;';
+                            cellStyle = 'background:#CECECE !important;color:#111 !important;';
                         } else {
                             let foundStatus = '';
                             for (const p of statusPriority) {
-                                if (cellRows.some(r => getStatusLocal2(r.DELIVERY_DATE || r.delivery_date, r.SEW_DATE || r.sew_date) === p)) { foundStatus = p; break; }
+                                if (cellRows.some(r => getStatus(r.DELIVERY_DATE || r.delivery_date, r.SEW_DATE || r.sew_date) === p)) { foundStatus = p; break; }
                             }
                             if (foundStatus === 'Delay') { cellStyle = 'background:#fee2e2 !important;color:#111 !important;'; cellClass = 'cell-row-delay'; }
                             else if (foundStatus === 'Can be delay') { cellStyle = 'background:#fef9c3 !important;color:#111 !important;'; cellClass = 'cell-row-can-delay'; }
@@ -1311,84 +1421,6 @@
                 );
             }
 
-            function updateFactoryDropdown() {
-                const select = document.getElementById('factorySelect');
-                const prev = loadFactorySelection();
-                select.innerHTML = '';
-                // Add factory options
-                const factoryArr = Array.from(factories).sort();
-                factoryArr.forEach(val => {
-                    const opt = document.createElement('option');
-                    opt.value = val;
-                    opt.textContent = val;
-                    select.appendChild(opt);
-                });
-                // Restore previous selection if possible, else select all
-                let found = false;
-                prev.forEach(v => {
-                    if (v && factoryArr.includes(v)) {
-                        select.querySelector(`option[value="${v}"]`).selected = true;
-                        found = true;
-                    }
-                });
-                if (!found) {
-                    // Select all by default (means "all factories")
-                    Array.from(select.options).forEach(opt => opt.selected = true);
-                }
-                updateAllDropdownsExceptFactory();
-            }
-
-            // --- Factory selection persistence ---
-            function saveFactorySelection() {
-                try {
-                    const select = document.getElementById('factorySelect');
-                    const selected = Array.from(select.selectedOptions).map(opt => opt.value);
-                    localStorage.setItem('factorySelect', JSON.stringify(selected));
-                } catch (e) {}
-            }
-            function loadFactorySelection() {
-                try {
-                    const val = localStorage.getItem('factorySelect');
-                    if (!val) return [];
-                    return JSON.parse(val);
-                } catch (e) { return []; }
-            }
-
-            // Patch updateFactoryDropdown to restore selection from localStorage
-            function updateFactoryDropdown() {
-                const select = document.getElementById('factorySelect');
-                const prev = loadFactorySelection();
-                select.innerHTML = '';
-                // Add factory options
-                const factoryArr = Array.from(factories).sort();
-                factoryArr.forEach(val => {
-                    const opt = document.createElement('option');
-                    opt.value = val;
-                    opt.textContent = val;
-                    select.appendChild(opt);
-                });
-                // Restore previous selection if possible, else select all
-                let found = false;
-                prev.forEach(v => {
-                    if (v && factoryArr.includes(v)) {
-                        select.querySelector(`option[value="${v}"]`).selected = true;
-                        found = true;
-                    }
-                });
-                if (!found) {
-                    // Select all by default (means "all factories")
-                    Array.from(select.options).forEach(opt => opt.selected = true);
-                }
-                updateAllDropdownsExceptFactory();
-            }
-
-            // Save factory selection on change
-            document.addEventListener('DOMContentLoaded', function() {
-                const factorySelect = document.getElementById('factorySelect');
-                if (factorySelect) {
-                    factorySelect.addEventListener('change', saveFactorySelection);
-                }
-            });
 
             function showLoadingSpinnerOverlay() {
                 let container = document.getElementById('pivotTableContainer');
@@ -1405,97 +1437,7 @@
                 let container = document.getElementById('pivotTableContainer');
                 let overlay = container.querySelector('.table-loading-overlay');
                 if (overlay) overlay.style.display = 'none';
-            }
-
-            function filterAndRender() {
-                showLoadingSpinnerOverlay();
-                setTimeout(() => {
-                    updateAllDropdownsExceptFactory();
-                    const filters = getCurrentFilters();
-                    let filteredData = allData.filter(row => {
-                        const factory = row.FACTORY || row.factory;
-                        const styleRef = row.STYLE_REF || row.style_ref;
-                        const customerName = row.CUSTOMER_NAME || row.customer_name;
-                        const soNoDoc = row.SO_NO_DOC || row.so_no_doc;
-                        const productType = row.PRODUCT_TYPE || row.product_type;
-                        const subNo = row.SUB_NO || row.sub_no;
-                        const colorFc = row.COLOR_FC || row.color_fc;
-                        const dateRaw = row.SEW_DATE || row.sew_date;
-                        const shipRaw = row.DELIVERY_DATE || row.delivery_date;
-                        let date = '';
-                        let shipDate = '';
-                        if (dateRaw) {
-                            const dateObj = new Date(dateRaw);
-                            if (!isNaN(dateObj)) {
-                                date = dateObj.toISOString().split('T')[0];
-                            }
-                        }
-                        if (shipRaw) {
-                            const sObj = new Date(shipRaw);
-                            if (!isNaN(sObj)) {
-                                shipDate = sObj.toISOString().split('T')[0];
-                            }
-                        }
-                        return (
-                            (filters.factory.length === 0 || filters.factory.includes(factory)) &&
-                            (filters.styleRef.length === 0 || filters.styleRef.includes(styleRef)) &&
-                            (filters.customerName.length === 0 || filters.customerName.includes(customerName)) &&
-                            (filters.soNoDoc.length === 0 || filters.soNoDoc.includes(soNoDoc)) &&
-                            (filters.productType.length === 0 || filters.productType.includes(productType)) &&
-                            (filters.subNo.length === 0 || filters.subNo.includes(subNo)) &&
-                            (filters.colorFc.length === 0 || filters.colorFc.includes(colorFc)) &&
-                            (!filters.dateStart || date >= filters.dateStart) &&
-                            (!filters.dateEnd || date <= filters.dateEnd) &&
-                            (!filters.shipDateStart || shipDate >= filters.shipDateStart) &&
-                            (!filters.shipDateEnd || shipDate <= filters.shipDateEnd)
-                        );
-                    });
-
-                    // --- SO No Doc type filtering for table ---
-                    // Use window.soNoDocTypeSelections set by modal logic, or fallback to both
-                    let soNoDocTypeSelections = window.soNoDocTypeSelections || [];
-                    if (soNoDocTypeSelections.length === 1) {
-                        const type = soNoDocTypeSelections[0];
-                        filteredData = filteredData.filter(row => {
-                            const soNoDocVal = String(row.SO_NO_DOC || row.so_no_doc || '');
-                            const digits = soNoDocVal.replace(/\D/g, '');
-                            if (type === 'Early') return digits.length === 7 && /^[478]/.test(digits);
-                            if (type === 'Bulk') return digits.length === 7 && !/^[478]/.test(digits);
-                            if (type === 'Sample') return digits.length === 8 || (digits.length === 7 && /^2/.test(digits));
-                            return true;
-                        });
-                    }
-                    // --- Save all lines present in filteredData before selectedLines filter ---
-                    availableLines = Array.from(new Set(filteredData.map(row => row.PROD_LINE || row.prod_line || 'Unknown'))).sort();
-
-                    // --- Filter by selectedLines ---
-                    let filteredByLines = filteredData;
-                    if (selectedLines.length > 0) {
-                        filteredByLines = filteredData.filter(row => {
-                            const line = row.PROD_LINE || row.prod_line || 'Unknown';
-                            return selectedLines.includes(line);
-                        });
-                    }
-                    // --- Determine if By Points should be enabled ---
-                    const soNoDocSelected = getSelectedValues('soNoDocSelect');
-                    const togglePoints = document.getElementById('togglePoints');
-                    if (togglePoints) {
-                        if (soNoDocSelected.length === 1) {
-                            togglePoints.disabled = false;
-                        } else {
-                            togglePoints.checked = false;
-                            usePoints = false;
-                            togglePoints.disabled = true;
-                        }
-                    }
-                    window._lastFilteredData = filteredByLines; // Save for graph
-                    renderDashboard(filteredByLines);
-                    if (currentView === 'graph') {
-                        renderPlanPcsGraph(filteredByLines);
-                    }
-                    hideLoadingSpinnerOverlay();
-                }, 0);
-            }
+            }  
 
             function resetFilters() {
                 showLoadingSpinnerOverlay();
@@ -1530,7 +1472,7 @@
                 }
                 updateAllDropdownsExceptFactory();
                 filterAndRender();
-            }
+                                             }
 
             showLoadingSpinnerOverlay();
             fetch('/api/plan_data')
@@ -1542,6 +1484,7 @@
                     allData = data;
                     factories = new Set(data.map(row => row.FACTORY || row.factory).filter(Boolean));
                     assignStyleColors();
+                    assignProductColors(); // <-- assign product colors too
                     initChoicesDropdowns();
                     updateAllDropdowns(); // <-- update all dropdowns including factory
                     updateDateInputs();
@@ -1922,157 +1865,184 @@
         const table = document.getElementById('pivotTable');
         if (!table) return;
 
-        Array.from(table.querySelectorAll('tbody tr')).forEach((rowTr, rowIdx) => {
-            // Prefer dataset attributes set during rendering. This also distinguishes row type.
+        Array.from(table.querySelectorAll('tbody tr')).forEach((rowTr) => {
             let line = rowTr.dataset.line || '';
-            let style = null;
             let factory = null;
             const rowType = rowTr.dataset.rowType || (expandLineStyle ? 'Style' : 'Style');
-            if (expandLineStyle) {
-                // For expanded mode, fall back to previous parsing if dataset not set
+
+            // If dataset.line contains "Factory - Line" (collapsed multi-factory key), split it now
+            if (line && line.includes(' - ')) {
+                const parts = line.split(' - ');
+                factory = parts[0].trim();
+                line = parts.slice(1).join(' - ').trim();
+            }
+
+            // fallback parsing for collapsed rows
+            if (!line && !expandLineStyle) {
                 const td = rowTr.querySelector('td');
-                if (td && !rowTr.dataset.line) {
-                    const txt = td.textContent || '';
-                    const parts = txt.split('/');
-                    line = parts[0].trim();
-                    style = (parts[1] || '').trim();
-                } else if (rowTr.dataset.line && rowTr.dataset.rowType) {
-                    // In expanded mode we store sub-labels differently; leave style null so handler derives it when needed
-                }
-            } else {
-                // Collapsed: dataset.line holds the logical line (works even when first-cell is rowspan)
-                if (!line) {
-                    // fallback: attempt old parsing
-                    const td = rowTr.querySelector('td');
-                    const txt = td ? (td.textContent || '').trim() : '';
-                    if (txt.includes(' - ')) {
-                        [factory, line] = txt.split(' - ').map(s => s.trim());
-                    } else {
-                        factory = null;
-                        line = txt;
-                    }
+                const txt = td ? (td.textContent || '').trim() : '';
+                if (txt.includes(' - ')) {
+                    [factory, line] = txt.split(' - ').map(s => s.trim());
+                } else {
+                    factory = null;
+                    line = txt;
                 }
             }
 
-            Array.from(rowTr.querySelectorAll('td.date-col')).forEach((cellTd, colIdx) => {
-                // Skip attaching click handlers for non-style rows (product / efficiency)
-                const currentRowType = rowTr.dataset.rowType || (expandLineStyle ? 'Style' : 'Style');
-                // If not a style row, make non-clickable
-                if (currentRowType !== 'Style') {
+            Array.from(rowTr.querySelectorAll('td.date-col')).forEach((cellTd) => {
+                const groupKey = cellTd.getAttribute('data-full-date');
+                const styleColorChecked = document.getElementById('toggleStyleColors')?.checked;
+
+                // Determine if this row should be clickable:
+                const clickableWhenByStyle = styleColorChecked && selectedByStyleOptions.includes(rowType);
+                if (!(rowType === 'Style' || clickableWhenByStyle)) {
                     cellTd.style.cursor = 'default';
                     return;
                 }
-                let groupKey = cellTd.getAttribute('data-full-date');
                 cellTd.style.cursor = 'pointer';
+
                 cellTd.onclick = function() {
-                     const styleColorChecked = document.getElementById('toggleStyleColors')?.checked;
-                     if (styleColorChecked) {
-                         let matchingRows;
-                         if (expandLineStyle) {
-                             // Expanded: group by line+style
-                             const td = rowTr.querySelector('td');
-                             let line = '', style = '';
-                             if (td) {
-                                 const txt = td.textContent || '';
-                                 const parts = txt.split('/');
-                                 line = parts[0].trim();
-                                 style = (parts[1] || '').trim();
-                             }
-                             matchingRows = filteredData.filter(r => {
-                                 const rLine = r.PROD_LINE || r.prod_line || 'Unknown';
-                                 const rStyle = r.STYLE_REF || r.style_ref || 'Unknown';
-                                 const dateRaw = r.SEW_DATE || r.sew_date || '';
-                                 if (!dateRaw) return false;
-                                 const dateObj = new Date(dateRaw);
-                                 if (isNaN(dateObj)) return false;
-                                 let rGroupKey;
-                                 if (groupBy === 'day') rGroupKey = dateObj.toISOString().split('T')[0];
-                                 else if (groupBy === 'week') rGroupKey = getISOWeekString(dateObj);
-                                 else if (groupBy === 'month') rGroupKey = getMonthString(dateObj);
-                                 return rLine === line && rStyle === style && rGroupKey === groupKey;
-                             });
-                         } else {
-                             // Collapsed: group by (factory-line) if multi-factory, else by line
-                             const td = rowTr.querySelector('td');
-                             let factory = null, line = '';
-                             if (td) {
-                                 const txt = td.textContent || '';
-                                 if (txt.includes(' - ')) {
-                                     // "Factory - Line"
-                                     [factory, line] = txt.split(' - ').map(s => s.trim());
-                                 } else {
-                                     factory = null;
-                                     line = txt.trim();
-                                 }
-                             }
-                             matchingRows = filteredData.filter(r => {
-                                 const rFactory = r.FACTORY || r.factory || 'Unknown';
-                                 const rLine = r.PROD_LINE || r.prod_line || 'Unknown';
-                                 const dateRaw = r.SEW_DATE || r.sew_date || '';
-                                 if (!dateRaw) return false;
-                                 const dateObj = new Date(dateRaw);
-                                 if (isNaN(dateObj)) return false;
-                                 let rGroupKey;
-                                 if (groupBy === 'day') rGroupKey = dateObj.toISOString().split('T')[0];
-                                 else if (groupBy === 'week') rGroupKey = getISOWeekString(dateObj);
-                                 else if (groupBy === 'month') rGroupKey = getMonthString(dateObj);
-                                 if (factory) {
-                                     // Grouped by "Factory - Line"
-                                     return rFactory === factory && rLine === line && rGroupKey === groupKey;
-                                 } else {
-                                     // Grouped by line only
-                                     return rLine === line && rGroupKey === groupKey;
-                                 }
-                             });
-                         }
-                         // Get distinct SO No
-                         const soNos = Array.from(new Set(matchingRows.map(r => r.SO_NO_DOC || r.so_no_doc).filter(Boolean)));
-                         showSoNoImageModal(soNos, matchingRows); // Pass matchingRows for style names
-                         return;
-                     }
- 
-                     let matchingRows;
-                     if (expandLineStyle) {
-                         matchingRows = filteredData.filter(r => {
-                             const rLine = r.PROD_LINE || r.prod_line || 'Unknown';
-                             const rStyle = r.STYLE_REF || r.style_ref || 'Unknown';
-                             const dateRaw = r.SEW_DATE || r.sew_date || '';
-                             if (!dateRaw) return false;
-                             const dateObj = new Date(dateRaw);
-                             if (isNaN(dateObj)) return false;
-                             let rGroupKey;
-                             if (groupBy === 'day') rGroupKey = dateObj.toISOString().split('T')[0];
-                             else if (groupBy === 'week') rGroupKey = getISOWeekString(dateObj);
-                             else if (groupBy === 'month') rGroupKey = getMonthString(dateObj);
-                             return rLine === line && rStyle === style && rGroupKey === groupKey;
-                         });
-                         openCellDetailModal(matchingRows, `${line} / ${style}`, groupKey);
-                     } else {
-                         matchingRows = filteredData.filter(r => {
-                             const rFactory = r.FACTORY || r.factory || 'Unknown';
-                             const rLine = r.PROD_LINE || r.prod_line || 'Unknown';
-                             const dateRaw = r.SEW_DATE || r.sew_date || '';
-                             if (!dateRaw) return false;
-                             const dateObj = new Date(dateRaw);
-                             if (isNaN(dateObj)) return false;
-                             let rGroupKey;
-                             if (groupBy === 'day') rGroupKey = dateObj.toISOString().split('T')[0];
-                             else if (groupBy === 'week') rGroupKey = getISOWeekString(dateObj);
-                             else if (groupBy === 'month') rGroupKey = getMonthString(dateObj);
-                             if (factory) {
-                                 // Grouped by "Factory - Line"
-                                 return rFactory === factory && rLine === line && rGroupKey === groupKey;
-                             } else {
-                                 // Grouped by line only
-                                 return rLine === line && rGroupKey === groupKey;
-                             }
-                         });
-                         // Show "Factory - Line" or just "Line" in modal
-                         openCellDetailModal(matchingRows, factory ? `${factory} - ${line}` : line, groupKey);
-                     }
-                 };
-             });
-         });
+                    // helper to compute group key for a data row
+                    function computeGroupKeyForRow(r) {
+                        const d = new Date(r.SEW_DATE || r.sew_date || '');
+                        if (isNaN(d)) return null;
+                        if (groupBy === 'day') return d.toISOString().split('T')[0];
+                        if (groupBy === 'week') return getISOWeekString(d);
+                        return getMonthString(d);
+                    }
+
+                    // Expanded mode: first td contains "LINE / SUBLABEL"
+                    if (expandLineStyle) {
+                        const td = rowTr.querySelector('td');
+                        let parsedLine = '', parsedSub = '';
+                        if (td) {
+                            const txt = td.textContent || '';
+                            const parts = txt.split('/');
+                            parsedLine = (parts[0] || '').trim();
+                            parsedSub = (parts[1] || '').trim();
+                        }
+
+                        if (styleColorChecked) {
+                            if (rowType === 'Product type') {
+                                // match by PRODUCT_TYPE
+                                const matchingRows = filteredData.filter(r => {
+                                    const rLine = r.PROD_LINE || r.prod_line || 'Unknown';
+                                    const rProd = r.PRODUCT_TYPE || r.product_type || 'Unknown';
+                                    const rGroup = computeGroupKeyForRow(r);
+                                    return rLine === parsedLine && rProd === parsedSub && rGroup === groupKey;
+                                });
+                                const soNos = Array.from(new Set(matchingRows.map(r => r.SO_NO_DOC || r.so_no_doc).filter(Boolean)));
+                                showSoNoImageModal(soNos, matchingRows);
+                                return;
+                            } else if (rowType === 'Efficiency') {
+                                // open detail modal for the line+group
+                                const matchingRows = filteredData.filter(r => {
+                                    const rLine = r.PROD_LINE || r.prod_line || 'Unknown';
+                                    const rGroup = computeGroupKeyForRow(r);
+                                    return rLine === parsedLine && rGroup === groupKey;
+                                });
+                                openCellDetailModal(matchingRows, parsedLine, groupKey);
+                                return;
+                            } else {
+                                // Style behaviour (image modal)
+                                const styleName = parsedSub;
+                                const matchingRows = filteredData.filter(r => {
+                                    const rLine = r.PROD_LINE || r.prod_line || 'Unknown';
+                                    const rStyle = r.STYLE_REF || r.style_ref || 'Unknown';
+                                    const rGroup = computeGroupKeyForRow(r);
+                                    return rLine === parsedLine && rStyle === styleName && rGroup === groupKey;
+                                });
+                                const soNos = Array.from(new Set(matchingRows.map(r => r.SO_NO_DOC || r.so_no_doc).filter(Boolean)));
+                                showSoNoImageModal(soNos, matchingRows);
+                                return;
+                            }
+                        } else {
+                            // styleColor not checked => default detail modal behavior only for Style rows
+                            if (rowType !== 'Style') return;
+                            const styleName = parsedSub;
+                            const matchingRows = filteredData.filter(r => {
+                                const rLine = r.PROD_LINE || r.prod_line || 'Unknown';
+                                const rStyle = r.STYLE_REF || r.style_ref || 'Unknown';
+                                const rGroup = computeGroupKeyForRow(r);
+                                return rLine === parsedLine && rStyle === styleName && rGroup === groupKey;
+                            });
+                            openCellDetailModal(matchingRows, `${parsedLine} / ${styleName}`, groupKey);
+                            return;
+                        }
+                    } else {
+                        // Collapsed mode
+                        // parse first cell if needed (already attempted above)
+                        const parsedFactory = factory;
+                        const parsedLine = line;
+
+                        if (styleColorChecked) {
+                            // If Product type row clicked
+                            if (rowType === 'Product type') {
+                                const prodName = cellTd.textContent?.trim();
+                                if (!prodName) return;
+                                const matchingRows = filteredData.filter(r => {
+                                    const rFactory = r.FACTORY || r.factory || 'Unknown';
+                                    const rLine = r.PROD_LINE || r.prod_line || 'Unknown';
+                                    const rProd = r.PRODUCT_TYPE || r.product_type || 'Unknown';
+                                    const rGroup = computeGroupKeyForRow(r);
+                                    if (parsedFactory) {
+                                        return rFactory === parsedFactory && rLine === parsedLine && rProd === prodName && rGroup === groupKey;
+                                    }
+                                    return rLine === parsedLine && rProd === prodName && rGroup === groupKey;
+                                });
+                                const soNos = Array.from(new Set(matchingRows.map(r => r.SO_NO_DOC || r.so_no_doc).filter(Boolean)));
+                                showSoNoImageModal(soNos, matchingRows);
+                                return;
+                            } else if (rowType === 'Efficiency') {
+                                // Efficiency -> open detail modal for the line
+                                const matchingRows = filteredData.filter(r => {
+                                    const rFactory = r.FACTORY || r.factory || 'Unknown';
+                                    const rLine = r.PROD_LINE || r.prod_line || 'Unknown';
+                                    const rGroup = computeGroupKeyForRow(r);
+                                    if (parsedFactory) {
+                                        return rFactory === parsedFactory && rLine === parsedLine && rGroup === groupKey;
+                                    }
+                                    return rLine === parsedLine && rGroup === groupKey;
+                                });
+                                openCellDetailModal(matchingRows, parsedFactory ? `${parsedFactory} - ${parsedLine}` : parsedLine, groupKey);
+                                return;
+                            } else {
+                                // Style row with style-color on -> cell shows style name; open image modal
+                                const styleName = cellTd.textContent?.trim();
+                                if (!styleName) return;
+                                const matchingRows = filteredData.filter(r => {
+                                    const rFactory = r.FACTORY || r.factory || 'Unknown';
+                                    const rLine = r.PROD_LINE || r.prod_line || 'Unknown';
+                                    const rStyle = r.STYLE_REF || r.style_ref || 'Unknown';
+                                    const rGroup = computeGroupKeyForRow(r);
+                                    if (parsedFactory) {
+                                        return rFactory === parsedFactory && rLine === parsedLine && rStyle === styleName && rGroup === groupKey;
+                                    }
+                                    return rLine === parsedLine && rStyle === styleName && rGroup === groupKey;
+                                });
+                                const soNos = Array.from(new Set(matchingRows.map(r => r.SO_NO_DOC || r.so_no_doc).filter(Boolean)));
+                                showSoNoImageModal(soNos, matchingRows);
+                                return;
+                            }
+                        } else {
+                            // styleColor not checked => only Style rows are clickable and open details
+                            if (rowType !== 'Style') return;
+                            const matchingRows = filteredData.filter(r => {
+                                const rFactory = r.FACTORY || r.factory || 'Unknown';
+                                const rLine = r.PROD_LINE || r.prod_line || 'Unknown';
+                                const rGroup = computeGroupKeyForRow(r);
+                                if (parsedFactory) {
+                                    return rFactory === parsedFactory && rLine === parsedLine && rGroup === groupKey;
+                                }
+                                return rLine === parsedLine && rGroup === groupKey;
+                            });
+                            openCellDetailModal(matchingRows, parsedFactory ? `${parsedFactory} - ${parsedLine}` : parsedLine, groupKey);
+                            return;
+                        }
+                    }
+                };
+            });
+        });
      }
 
     // --- View switch logic ---
@@ -2584,9 +2554,9 @@
             <div class="modal-content" style="min-width:320px;max-width:96vw;">
                 <div style="font-weight:bold;font-size:1.1em;margin-bottom:8px;">By style options</div>
                 <form id="byStyleForm" style="display:flex;flex-direction:column;gap:8px;">
-                    <label><input type="checkbox" value="Efficiency"> Efficiency</label>
-                    <label><input type="checkbox" value="Product type"> Product type</label>
                     <label><input type="checkbox" value="Style"> Style</label>
+                    <label><input type="checkbox" value="Product type"> Product type</label>
+                    <label><input type="checkbox" value="Efficiency"> Efficiency</label>
                 </form>
                 <div style="margin-top:16px;display:flex;justify-content:flex-end;gap:12px;">
                     <button type="button" id="byStyleModalOkBtn" style="background:#219a0b;color:#fff;border:none;border-radius:5px;padding:6px 18px;font-weight:600;">OK</button>
@@ -2614,10 +2584,18 @@
             e.preventDefault();
             const modal = document.getElementById(byStyleModalId);
             const form = document.getElementById('byStyleForm');
-            // Set checked boxes based on selectedByStyleOptions (default ensures 'Style' is checked)
+            const styleBox = document.getElementById('toggleStyleColors');
+            // Set checked boxes based on selectedByStyleOptions only if the main "By Style" toggle is enabled.
+            // If the toggle is NOT checked, show the modal with all options unchecked and disabled (so they are not presented as active).
             Array.from(form.elements).forEach(el => {
                 if (el.type === 'checkbox') {
-                    el.checked = selectedByStyleOptions.includes(el.value);
+                    if (styleBox && styleBox.checked) {
+                        el.checked = selectedByStyleOptions.includes(el.value);
+                        el.disabled = false;
+                    } else {
+                        el.checked = false;
+                        el.disabled = true;
+                    }
                 }
             });
             modal.style.display = 'flex';
@@ -2626,13 +2604,20 @@
 
     // OK/Cancel logic for By Style modal
     document.getElementById('byStyleModalOkBtn').onclick = function() {
+        const styleBox = document.getElementById('toggleStyleColors');
         const form = document.getElementById('byStyleForm');
-        selectedByStyleOptions = Array.from(form.elements)
-            .filter(el => el.type === 'checkbox' && el.checked)
-            .map(el => el.value);
-        // Default to ['Style'] if nothing selected
-        if (selectedByStyleOptions.length === 0) selectedByStyleOptions = ['Style'];
-
+        // Only apply modal selections when the main By Style toggle is checked.
+        if (styleBox && styleBox.checked) {
+            selectedByStyleOptions = Array.from(form.elements)
+                .filter(el => el.type === 'checkbox' && el.checked)
+                .map(el => el.value);
+            // Default to ['Style'] if nothing selected
+            if (selectedByStyleOptions.length === 0) selectedByStyleOptions = ['Style'];
+        } else {
+            // When By Style toggle is off, selections in modal must not be applied.
+            // Keep a safe default (we will also ensure rendering ignores modal selections unless the toggle is on).
+            selectedByStyleOptions = ['Style'];
+        }
         document.getElementById(byStyleModalId).style.display = 'none';
         showLoadingSpinnerOverlay();
         setTimeout(filterAndRender, 0);

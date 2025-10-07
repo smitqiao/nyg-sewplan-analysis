@@ -47,9 +47,14 @@ def get_plan_data():
                     h.BOND,
                     h.LASER,
                     h.ORDER_PLAN,
-                    h.START_SEW
+                    h.START_SEW,
+                    eff.EFFICIENCY
                 FROM FR_IMPORT_PLAN_DETAIL d
                 LEFT JOIN FR_IMPORT_PLAN_HEAD h ON d.HEAD_ID = h.HEAD_ID
+                LEFT JOIN FR_PLANNED_EFF eff
+                    ON h.FACTORY = eff.FACTORY
+                    AND h.PROD_LINE = eff.LINE
+                    AND d.SEW_DATE = eff.SEW_DATE
             """))
             columns = result.keys()
             data = [dict(zip(columns, row)) for row in result.fetchall()]
@@ -87,24 +92,24 @@ def serve_dashboard():
 def serve_static(filename):
     return send_from_directory('.', filename)
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5010)
-
 # if __name__ == '__main__':
-#     debug_mode = '--debug' in sys.argv
-#     host = '0.0.0.0'
-#     port = 5010
+#     app.run(debug=True, host='0.0.0.0', port=5010)
 
-#     hostname = socket.gethostname()
-#     local_ip = socket.gethostbyname(hostname)
+if __name__ == '__main__':
+    debug_mode = '--debug' in sys.argv
+    host = '0.0.0.0'
+    port = 5010
+
+    hostname = socket.gethostname()
+    local_ip = socket.gethostbyname(hostname)
     
-#     if debug_mode:
-#         print(f"Starting development server at:")
-#         print(f"  Local:     http://127.0.0.1:{port}")
-#         print(f"  Network:   http://{local_ip}:{port}")
-#         app.run(host=host, port=port, debug=True)
-#     else:
-#         print(f"Starting production server at:")
-#         print(f"  Local:     http://127.0.0.1:{port}")
-#         print(f"  Network:   http://{local_ip}:{port}")
-#         waitress.serve(app, host=host, port=port, threads=4, url_scheme='http')
+    if debug_mode:
+        print(f"Starting development server at:")
+        print(f"  Local:     http://127.0.0.1:{port}")
+        print(f"  Network:   http://{local_ip}:{port}")
+        app.run(host=host, port=port, debug=True)
+    else:
+        print(f"Starting production server at:")
+        print(f"  Local:     http://127.0.0.1:{port}")
+        print(f"  Network:   http://{local_ip}:{port}")
+        waitress.serve(app, host=host, port=port, threads=4, url_scheme='http')
