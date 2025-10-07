@@ -370,6 +370,31 @@
         #lineModal button:hover {
             background: #18b616;
         }
+
+        /* --- Export Mode Modal (added) --- */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 10002;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-content {
+            background: #fff;
+            border-radius: 8px;
+            padding: 24px;
+            min-width: 320px;
+            max-width: 90vw;
+            max-height: 80vh;
+            overflow: auto;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.18);
+            position: relative;
+        }
     </style>
 </head>
 <body>
@@ -380,10 +405,15 @@
         <h1 class="header-title" style="margin:0 0 0 16px;font-size:1.2em;flex:1;">Sewing Plan Analysis</h1>
         <!-- Reduce margin/padding for date range -->
         <div class="header-date-select" style="display:flex;align-items:center;gap:8px;margin:0 4px 0 4px;">
-            <label style="font-weight:bold;margin:0 2px 0 0;">Date from:</label>
+            <label style="font-weight:bold;margin:0 2px 0 0;">Start sew from:</label>
             <input type="date" id="dateStart" style="height:28px;min-width:100px;margin:0 2px;">
             <label style="font-weight:bold;margin:0 2px;">to</label>
             <input type="date" id="dateEnd" style="height:28px;min-width:100px;margin:0 2px;">
+            <!-- Shipment date filter (added) -->
+            <label style="font-weight:bold;margin:0 8px 0 12px;">Shipment from:</label>
+            <input type="date" id="shipDateStart" style="height:28px;min-width:100px;margin:0 2px;">
+            <label style="font-weight:bold;margin:0 2px;">to</label>
+            <input type="date" id="shipDateEnd" style="height:28px;min-width:100px;margin:0 2px;">
         </div>
         <!-- Remove arrow button here -->
     </div>
@@ -528,11 +558,17 @@
     }
     function getExportOptionStates() {
         // Get checkbox states and groupBy
+        // Respect temporary override from export modal: window._exportMode === 'current'|'summary'|'delay'
+        const modalMode = window._exportMode || null;
         const byMinutes = document.getElementById('toggleSamIeCalc')?.checked ? 'Yes' : 'No';
-        const byDelay = document.getElementById('toggleCellColors')?.checked ? 'Yes' : 'No';
         const byStyle = document.getElementById('toggleStyleColors')?.checked ? 'Yes' : 'No';
         const bySubprocess = document.getElementById('toggleSubprocess')?.checked ? 'Yes' : 'No';
         const byPoints = document.getElementById('togglePoints')?.checked ? 'Yes' : 'No';
+        // If modal forced mode is 'delay' -> force byDelay Yes, if 'current' -> force No
+        let byDelay;
+        if (modalMode === 'delay') byDelay = 'Yes';
+        else if (modalMode === 'current') byDelay = 'No';
+        else byDelay = document.getElementById('toggleCellColors')?.checked ? 'Yes' : 'No';
         const groupBy = (window.groupBy || 'day');
         // Subprocess selection
         let subprocesses = [];
@@ -556,167 +592,675 @@
             subprocesses: subprocesses && subprocesses.length ? subprocesses.join(', ') : ''
         };
     }
-    function exportPivotTableToExcel({ filteredData, groupBy, filters, tableData, dateHeaders }) {
-        const wsData = [];
-        const opts = getExportOptionStates();
-        const today = new Date();
-        const todayStr = today.toISOString().slice(0,10);
+    function exportPivotTableToExcel({ filteredData, groupBy, filters, tableData, dateHeaders, dcData }) {
+		const wsData = [];
+		const opts = getExportOptionStates();
+		const today = new Date();
+		const todayStr = today.toISOString().slice(0,10);
 
-        // --- If By Delay is checked, export grouped summary ---
-        if (opts.byDelay === 'Yes') {
-            wsData.push([
-                'Factory',
-                'Line',
-                'SO No',
-                'Customer',
-                'Style Ref',
-                'Sub No',
-                'Color FC',
-                'SAM',
-                'Delay Status',
-                'Earliest Start SEW',
-                'Max End SEW',
-                'Delivery',
-                'PCS',
-                'Order'
-            ]);
-            function excelDate(dt) {
-                // Converts JS Date to Excel date value (days since 1899-12-30)
-                if (!dt) return '';
-                const d = new Date(dt);
-                if (isNaN(d)) return '';
-                return Math.floor((d - new Date(Date.UTC(1899, 11, 30))) / (1000 * 60 * 60 * 24));
-            }
-            // --- Fetch order_qty map and continue export ---
-            fetch('/api/order_qty_map')
-                .then(res => res.json())
-                .then(orderQtyMap => {
-                    const groupMap = {};
-                    const selectedStatuses = window.selectedDelayStatuses || ['Delay', 'Can be delay', 'Too early', 'Ok'];
-                    filteredData.forEach(row => {
-                        const factory = row.FACTORY || row.factory || '';
-                        const line = row.PROD_LINE || row.prod_line || '';
-                        const soNo = row.SO_NO_DOC || row.so_no_doc || '';
-                        const customer = row.CUSTOMER_NAME || row.customer_name || '';
-                        const styleRef = row.STYLE_REF || row.style_ref || '';
-                        const subNo = row.SUB_NO || row.sub_no || '';
-                        const colorFc = row.COLOR_FC || row.color_fc || '';
-                        const samIe = row.SAM_IE || row.sam_ie || '';
-                        const sew = row.SEW_DATE || row.sew_date || '';
-                        const pcs = Number(row.PLAN_PCS || row.plan_pcs) || 0;
-                        const delivery = row.DELIVERY_DATE || row.delivery_date || '';
-                        // --- Use order_qty from FR_IMPORT_DATA_CENTER with color_fc ---
-                        const keyQty = `${soNo}||${subNo}||${colorFc}`;
-                        const orderQty = orderQtyMap[keyQty] !== undefined ? Number(orderQtyMap[keyQty]) : null;
-                        const orderPlan = orderQty !== null ? orderQty : Number(row.ORDER_PLAN || row.order_plan) || 0;
-                        const startSew = row.START_SEW || row.start_sew || '';
-                        // Determine delay status
-                        let status = '';
-                        const dDate = new Date(delivery);
-                        const sDate = new Date(sew);
-                        if (!isNaN(dDate) && !isNaN(sDate)) {
-                            const diff = Math.floor((dDate - sDate) / (1000 * 60 * 60 * 24));
-                            if (diff < 0) status = 'Delay';
-                            else if (diff < 4 && diff > 0) status = 'Can be delay';
-                            else if (diff > 20) status = 'Too early';
-                            else status = 'Ok';
-                        }
-                        if (!selectedStatuses.includes(status)) return;
-                        // Group by all requested fields
-                        const key = [factory, line, soNo, customer, styleRef, subNo, colorFc, samIe, status, delivery].join('||');
-                        if (!groupMap[key]) {
-                            groupMap[key] = {
-                                factory,
-                                line,
-                                soNo,
-                                customer,
-                                styleRef,
-                                subNo,
-                                colorFc,
-                                samIe,
-                                status,
-                                delivery,
-                                maxSew: sew,
-                                sumPcs: pcs,
-                                maxOrderPlan: orderPlan,
-                                earliestStartSew: startSew && !isNaN(new Date(startSew)) ? startSew : ''
-                            };
-                        } else {
-                            // Update maxSew if this row's sew date is later
-                            if (sew && groupMap[key].maxSew) {
-                                const prev = new Date(groupMap[key].maxSew);
-                                const curr = new Date(sew);
-                                if (!isNaN(curr) && !isNaN(prev) && curr > prev) {
-                                    groupMap[key].maxSew = sew;
-                                }
-                            }
-                            groupMap[key].sumPcs += pcs;
-                            // Update maxOrderPlan if this row's orderPlan is greater
-                            if (orderPlan > groupMap[key].maxOrderPlan) {
-                                groupMap[key].maxOrderPlan = orderPlan;
-                            }
-                            // Update earliestStartSew if this row's startSew is earlier
-                            if (startSew && !isNaN(new Date(startSew))) {
-                                if (!groupMap[key].earliestStartSew || new Date(startSew) < new Date(groupMap[key].earliestStartSew)) {
-                                    groupMap[key].earliestStartSew = startSew;
-                                }
-                            }
-                        }
-                    });
-                    // --- Log 5 matched and 5 unmatched keys ---
-                    const allKeys = Object.values(groupMap).map(g => `${g.soNo}||${g.subNo}||${g.colorFc}`);
-                    const matchedKeys = allKeys.filter(k => orderQtyMap[k] !== undefined).slice(0, 5);
-                    const unmatchedKeys = allKeys.filter(k => orderQtyMap[k] === undefined).slice(0, 5);
-                    console.log('Matched keys (first 5):', matchedKeys);
-                    console.log('Unmatched keys (first 5):', unmatchedKeys);
+		// helper: build period string from a date (sew date) based on groupBy
+		function makePeriodKey(dateStr, groupBy) {
+			if (!dateStr) return '';
+			const d = new Date(dateStr);
+			if (isNaN(d)) return '';
+			if (groupBy === 'day') return d.toISOString().slice(0,10);
+			if (groupBy === 'week') {
+				const tmp = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+				const dayNum = tmp.getUTCDay() || 7;
+				tmp.setUTCDate(tmp.getUTCDate() + 4 - dayNum);
+				const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(),0,1));
+				const weekNum = Math.ceil((((tmp - yearStart) / 86400000) + 1)/7);
+				return `${tmp.getUTCFullYear()}-W${String(weekNum).padStart(2,'0')}`;
+			}
+			if (groupBy === 'month') return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+			return dateStr;
+		}
 
-                    Object.values(groupMap).forEach(g => {
-                        wsData.push([
-                            g.factory,
-                            g.line,
-                            g.soNo,
-                            g.customer,
-                            g.styleRef,
-                            g.subNo,
-                            g.colorFc,
-                            g.samIe,
-                            g.status,
-                            excelDate(g.earliestStartSew),
-                            excelDate(g.maxSew),
-                            excelDate(g.delivery),
-                            g.sumPcs,
-                            g.maxOrderPlan
-                        ]);
-                    });
+		function excelDate(dt) {
+			// Converts JS Date to Excel date value (days since 1899-12-30)
+			if (!dt) return '';
+			const d = new Date(dt);
+			if (isNaN(d)) return '';
+			return Math.floor((d - new Date(Date.UTC(1899, 11, 30))) / (1000 * 60 * 60 * 24));
+		}
 
-                    const ws = XLSX.utils.aoa_to_sheet(wsData);
-                    const dateCols = {};
-                    wsData[0].forEach((header, idx) => {
-                        if (["Earliest Start SEW", "Max End SEW", "Delivery"].includes(header)) {
-                            dateCols[idx] = true;
-                        }
-                    });
+		// Build order quantity maps from the filtered data itself
+		// Accept optional dcData (array) to build dc order maps separately
+		function buildOrderMaps(data, dcDataArray) {
+			const orderQtyMap = {};     // SO||SUB||LINE -> sum of ORDER_PLAN (count each HEAD once)
+			const orderTotalBySo = {};  // SO -> sum of ORDER_PLAN across all subs/lines
+            const dcOrderQtyMap = {};   // SO||SUB||LINE -> sum of ORDER_PLAN from DC
+            const dcOrderTotalBySo = {}; // SO -> sum of ORDER_PLAN from DC
+			const seenHead = new Set(); // track HEAD_ID we've already added
 
-                    for (let i = 1; i < wsData.length; i++) {
-                        for (const col in dateCols) {
-                            const val = wsData[i][col];
-                            if (typeof val === 'number' && val > 0) {
-                                const cellRef = XLSX.utils.encode_cell({ r: i, c: parseInt(col) });
-                                ws[cellRef].t = 'n';
-                                ws[cellRef].z = 'yyyy-mm-dd';
-                            }
-                        }
-                    }
-                    const wb = XLSX.utils.book_new();
-                    XLSX.utils.book_append_sheet(wb, ws, "PivotTable");
-                    XLSX.writeFile(wb, `Sewing_Plan_${todayStr}.xlsx`);
-                })
-                .catch(err => {
-                    alert('Failed to fetch order_qty for export: ' + err);
+			// Collect SO-level attribute sets
+			const soAttrSets = {}; // soNo -> { EMBROIDERY: Set(), HEAT: Set(), PAD_PRINT: Set(), PRINT: Set(), BOND: Set(), LASER: Set() }
+
+			data.forEach(row => {
+				const headId = row.HEAD_ID || row.head_id || '';
+				const soNo = row.SO_NO_DOC || row.so_no_doc || '';
+				const subNo = (row.SUB_NO || row.sub_no || '') + '';
+				const prodLine = row.PROD_LINE || row.prod_line || '';
+				const orderPlan = Number(row.ORDER_PLAN || row.order_plan) || 0;
+
+				// collect attributes regardless of seenHead
+				if (soNo) {
+					if (!soAttrSets[soNo]) {
+						soAttrSets[soNo] = {
+							EMBROIDERY: new Set(),
+							HEAT: new Set(),
+							PAD_PRINT: new Set(),
+							PRINT: new Set(),
+							BOND: new Set(),
+							LASER: new Set()
+						};
+					}
+					const s = soAttrSets[soNo];
+					const vEmb = row.EMBROIDERY || row.embroidery || '';
+					const vHeat = row.HEAT || row.heat || '';
+					const vPad = row.PAD_PRINT || row.pad_print || '';
+					const vPrint = row.PRINT || row.print || '';
+					const vBond = row.BOND || row.bond || '';
+					const vLaser = row.LASER || row.laser || '';
+					if (vEmb !== '' && vEmb !== null) s.EMBROIDERY.add(String(vEmb));
+					if (vHeat !== '' && vHeat !== null) s.HEAT.add(String(vHeat));
+					if (vPad !== '' && vPad !== null) s.PAD_PRINT.add(String(vPad));
+					if (vPrint !== '' && vPrint !== null) s.PRINT.add(String(vPrint));
+					if (vBond !== '' && vBond !== null) s.BOND.add(String(vBond));
+					if (vLaser !== '' && vLaser !== null) s.LASER.add(String(vLaser));
+				}
+
+				if (!soNo || !headId || orderPlan <= 0) return;
+
+				// Count each HEAD once — prevents inflating head ORDER_PLAN across multiple detail rows (colors)
+				const headKey = String(headId);
+				if (seenHead.has(headKey)) return;
+				seenHead.add(headKey);
+
+				const key = `${soNo}||${subNo}||${prodLine}`;
+				orderQtyMap[key] = (orderQtyMap[key] || 0) + orderPlan;
+				orderTotalBySo[soNo] = (orderTotalBySo[soNo] || 0) + orderPlan;
+			});
+
+            // Build DC maps from dcDataArray if provided (fetch separately — no join)
+            if (Array.isArray(dcDataArray)) {
+                // NOTE: FR_IMPORT_DATA_CENTER now exposes ORDER_QTY (use that for Actual Plan)
+                dcDataArray.forEach(row => {
+                    const soNo = row.SO_NO_DOC || row.so_no_doc || '';
+                    const subNo = (row.SUB_NO || row.sub_no || '') + '';
+                    const prodLine = row.PROD_LINE || row.prod_line || '';
+                    const orderQty = Number(row.ORDER_QTY || row.order_qty) || 0;
+                    if (!soNo || orderQty <= 0) return;
+                    const key = `${soNo}||${subNo}||${prodLine}`;
+                    dcOrderQtyMap[key] = (dcOrderQtyMap[key] || 0) + orderQty;
+                    dcOrderTotalBySo[soNo] = (dcOrderTotalBySo[soNo] || 0) + orderQty;
                 });
-            return; // Prevent normal export logic
-        }
-        // Second row: column headers
+            }
+
+			// Convert sets to joined strings for easy output
+			const soAttrs = {};
+			Object.keys(soAttrSets).forEach(so => {
+				const s = soAttrSets[so];
+				function joinSet(set) {
+					const arr = Array.from(set).filter(v => v !== '' && v !== 'null' && v !== null);
+					return arr.length ? arr.join('; ') : '';
+				}
+				soAttrs[so] = {
+					EMBROIDERY: joinSet(s.EMBROIDERY),
+					HEAT: joinSet(s.HEAT),
+					PAD_PRINT: joinSet(s.PAD_PRINT),
+					PRINT: joinSet(s.PRINT),
+					BOND: joinSet(s.BOND),
+					LASER: joinSet(s.LASER)
+				};
+			});
+
+			return { orderQtyMap, orderTotalBySo, dcOrderQtyMap, dcOrderTotalBySo, soAttrs };
+		}
+
+		// --- If By Delay is checked, export grouped summary ---
+		if (window._exportMode === 'delay') {
+			// Add "Period" column so export respects grouping selection
+			wsData.push([
+				'Factory',
+				'Line',
+				'SO No',
+				'Customer',
+				'Style Ref',
+				'Sub No',
+				'Color FC',
+				'SAM',
+				'Delay Status',
+				'Period',                // <-- new, computed from SEW_DATE according to groupBy
+				'Earliest Start SEW',
+				'Max End SEW',
+				'Delivery',
+				'PCS',
+				'Order'
+			]);
+
+			const groupMap = {};
+			const selectedStatuses = window.selectedDelayStatuses || ['Delay', 'Can be delay', 'Too early', 'Ok'];
+
+			filteredData.forEach(row => {
+				const factory = row.FACTORY || row.factory || '';
+				const line = row.PROD_LINE || row.prod_line || '';
+				const soNo = row.SO_NO_DOC || row.so_no_doc || '';
+				const customer = row.CUSTOMER_NAME || row.customer_name || '';
+				const styleRef = row.STYLE_REF || row.style_ref || '';
+				const subNo = row.SUB_NO || row.sub_no || '';
+				const colorFc = row.COLOR_FC || row.color_fc || '';
+				const samIe = row.SAM_IE || row.sam_ie || '';
+				const sew = row.SEW_DATE || row.sew_date || '';
+				const pcs = Number(row.PLAN_PCS || row.plan_pcs) || 0;
+				const delivery = row.DELIVERY_DATE || row.delivery_date || '';
+				const orderPlan = Number(row.ORDER_PLAN || row.order_plan) || 0;
+				const startSew = row.START_SEW || row.start_sew || '';
+
+				// Determine delay status for this row
+				let status = '';
+				const dDate = new Date(delivery);
+				const sDate = new Date(sew);
+				if (!isNaN(dDate) && !isNaN(sDate)) {
+					const diff = Math.floor((dDate - sDate) / (1000 * 60 * 60 * 24));
+					if (diff < 0) status = 'Delay';
+					else if (diff < 4 && diff > 0) status = 'Can be delay';
+					else if (diff > 20) status = 'Too early';
+					else status = 'Ok';
+				}
+
+				if (!selectedStatuses.includes(status)) return;
+
+				// compute period according to groupBy (use SEW_DATE to match pivot grouping)
+				const period = makePeriodKey(sew, groupBy);
+
+				// Group by identifying fields + period (so week/month/day grouping)
+				const key = [factory, line, soNo, customer, styleRef, subNo, colorFc, samIe, status, period].join('||');
+
+				if (!groupMap[key]) {
+					groupMap[key] = {
+						factory,
+						line,
+						soNo,
+						customer,
+						styleRef,
+						subNo,
+						colorFc,
+						samIe,
+						status,
+						period,
+						// For dates choose MIN for earliest values and MAX for latest
+						earliestStartSew: startSew && !isNaN(new Date(startSew)) ? startSew : '',
+						maxSew: sew || '',
+						deliveryMin: delivery || '',
+						sumPcs: pcs,
+						maxOrderPlan: orderPlan
+					};
+				} else {
+					const g = groupMap[key];
+					// sum PCS
+					g.sumPcs += pcs;
+					// earliest START_SEW -> MIN
+					if (startSew && !isNaN(new Date(startSew))) {
+						if (!g.earliestStartSew || new Date(startSew) < new Date(g.earliestStartSew)) {
+							g.earliestStartSew = startSew;
+						}
+					}
+					// max SEW -> MAX
+					if (sew && (!g.maxSew || new Date(sew) > new Date(g.maxSew))) {
+						g.maxSew = sew;
+					}
+					// delivery -> choose MIN (earliest) to be conservative; change to MAX if desired
+					if (delivery && (!g.deliveryMin || new Date(delivery) < new Date(g.deliveryMin))) {
+						g.deliveryMin = delivery;
+					}
+					// order plan: use MAX
+					if (orderPlan > (g.maxOrderPlan || 0)) {
+						g.maxOrderPlan = orderPlan;
+					}
+				}
+			});
+
+			// Convert grouped map to worksheet rows
+			Object.values(groupMap).forEach(g => {
+				wsData.push([
+					g.factory,
+					g.line,
+					g.soNo,
+					g.customer,
+					g.styleRef,
+					g.subNo,
+					g.colorFc,
+					g.samIe,
+					g.status,
+					g.period,
+					excelDate(g.earliestStartSew),
+					excelDate(g.maxSew),
+					excelDate(g.deliveryMin),
+					g.sumPcs,
+					g.maxOrderPlan
+				]);
+			});
+
+			const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+			// Identify date columns by header names (safer)
+			const dateCols = {};
+			const dateColNames = ["Earliest Start SEW", "Max End SEW", "Delivery"];
+			wsData[0].forEach((header, idx) => {
+				if (dateColNames.includes(header)) dateCols[idx] = true;
+			});
+
+			for (let i = 1; i < wsData.length; i++) {
+				for (const col in dateCols) {
+					const val = wsData[i][col];
+					if (typeof val === 'number' && val > 0) {
+						const cellRef = XLSX.utils.encode_cell({ r: i, c: parseInt(col) });
+						ws[cellRef].t = 'n';
+						ws[cellRef].z = 'dd-mm-yyyy';
+					}
+				}
+			}
+
+			const wb = XLSX.utils.book_new();
+			XLSX.utils.book_append_sheet(wb, ws, "PivotTable");
+			XLSX.writeFile(wb, `Sewing_Plan_Delay_${todayStr}.xlsx`);
+			return; // Prevent normal export logic
+		}
+
+		// --- SUMMARY export (modal "summary" mode) ---
+		if (window._exportMode === 'summary') {
+			const { orderQtyMap, orderTotalBySo, dcOrderQtyMap, dcOrderTotalBySo, soAttrs } = buildOrderMaps(filteredData, dcData || []);
+
+			// Helper: determine delay status for a single row
+			function getStatus(delivery, sew) {
+				const dDate = new Date(delivery);
+				const sDate = new Date(sew);
+				if (isNaN(dDate) || isNaN(sDate)) return '';
+				const diff = Math.floor((dDate - sDate) / (1000 * 60 * 60 * 24));
+				if (diff < 0) return 'Delay';
+				if (diff <= 5 && diff >= 0) return 'Can be delay';
+				if (diff > 20) return 'Too early';
+				return 'Ok';
+			}
+			// Helper: compute SO No Doc type (same logic as main.js)
+			function getSoType(soNoDocVal) {
+				const digits = String(soNoDocVal || '').replace(/\D/g, '');
+				if (!digits) return '';
+				// Early: 7-digit starting with 4/7/8
+				if (digits.length === 7 && /^[478]/.test(digits)) return 'Early';
+				// Bulk: other 7-digit numbers (not starting with 4/7/8)
+				if (digits.length === 7 && !/^[478]/.test(digits)) {
+					// FRONTEND SPECIAL CASE: treat 7-digit starting with '2' as Sample
+					if (/^2/.test(digits)) return 'Sample';
+					return 'Bulk';
+				}
+				// Sample: 8-digit
+				if (digits.length === 8) return 'Sample';
+				return '';
+			}
+
+			// Header: metadata columns followed by date headers (formatted)
+			// NOTE: added Embroidery/Heat/Pad Print/Print/Bond/Laser after variances
+			const metaCols = [
+				'Factory','Line','SO No','Customer','Style Ref','Sub No',
+				'Delay Status','SO No Type','SAM','Order QTY','Planned QTY',
+				'Earliest Start SEW','Max End SEW','Delivery','Order Variance','Planned Variance',
+				'Embroidery','Heat','Pad Print','Print','Bond','Laser'
+			];
+			// Build header: metaCols then period columns using formatDateHeader
+			const headerRow = metaCols.concat(dateHeaders.map(d => formatDateHeader(d, groupBy)));
+			wsData.push(headerRow);
+
+			// group map keyed by Factory||Line||SoNo||SubNo (keep sub separate)
+			const groupMap = {}; // key -> { meta..., periodSums: {period: value}, total: number, orderPlanSum, statusSet }
+			const byMinutes = (opts.byMinutes === 'Yes');
+
+			filteredData.forEach(row => {
+				const factory = row.FACTORY || row.factory || '';
+				const line = row.PROD_LINE || row.prod_line || '';
+				const soNo = row.SO_NO_DOC || row.so_no_doc || '';
+				const customer = row.CUSTOMER_NAME || row.customer_name || '';
+				const styleRef = row.STYLE_REF || row.style_ref || '';
+				const subNo = (row.SUB_NO || row.sub_no || '') + '';
+				const samIe = row.SAM_IE || row.sam_ie || '';
+				const sew = row.SEW_DATE || row.sew_date || '';
+				const delivery = row.DELIVERY_DATE || row.delivery_date || '';
+				const startSew = row.START_SEW || row.start_sew || '';
+				const pcs = Number(row.PLAN_PCS || row.plan_pcs) || 0;
+				const orderPlan = Number(row.ORDER_PLAN || row.order_plan) || 0;
+
+				// determine period
+				const period = makePeriodKey(sew, groupBy);
+				// IMPORTANT: include line in the grouping key to keep line-specific values separate
+				const key = [factory, line, soNo, subNo].join('||');
+
+				// Get order quantity from the map built from data
+				const orderKey = `${soNo}||${subNo}||${line}`;
+				const orderQty = orderQtyMap[orderKey] || orderPlan;
+
+				if (!groupMap[key]) {
+					groupMap[key] = {
+						factory, line, soNo, subNo,
+						customer: customer || '',
+						styleRef: styleRef || '',
+						samIe: samIe || '',
+						orderPlanSum: orderQty,
+						hasData: true,
+						earliestStartSew: startSew && !isNaN(new Date(startSew)) ? startSew : '',
+						maxSew: sew || '',
+						deliveryMin: delivery || '',
+						periodSums: {}, // period -> numeric sum
+						total: 0,
+						statusSet: new Set() // collect per-row delay statuses
+					};
+				} else {
+					// For existing groups, update orderPlanSum if we find a better value
+					const g = groupMap[key];
+					if (orderQty > g.orderPlanSum) {
+						g.orderPlanSum = orderQty;
+					}
+				}
+				
+				const g = groupMap[key];
+
+				// update meta: pick earliest start, max sew, earliest delivery
+				if (startSew && !isNaN(new Date(startSew))) {
+					if (!g.earliestStartSew || new Date(startSew) < new Date(g.earliestStartSew)) g.earliestStartSew = startSew;
+				}
+				if (sew && (!g.maxSew || new Date(sew) > new Date(g.maxSew))) g.maxSew = sew;
+				if (delivery && (!g.deliveryMin || new Date(delivery) < new Date(g.deliveryMin))) g.deliveryMin = delivery;
+
+				// collect per-row delay status for the group
+				const rowStatus = getStatus(delivery, sew);
+				if (rowStatus) g.statusSet.add(rowStatus);
+
+				// value depending on By Minutes toggle
+				const val = byMinutes ? pcs * (Number(row.SAM_IE || row.sam_ie) || 0) : pcs;
+				if (!g.periodSums[period]) g.periodSums[period] = 0;
+				g.periodSums[period] += Number(val || 0);
+				g.total += Number(val || 0);
+			});
+
+			// Helper: choose group delay status by priority
+			function pickPriorityStatus(statusSet) {
+				const priority = ['Delay','Can be delay','Too early','Ok'];
+				for (const p of priority) if (statusSet.has(p)) return p;
+				return '';
+			}
+
+			// Build rows in deterministic order: sort by factory, then line, then soNo, then subNo
+			const rows = Object.values(groupMap).sort((a,b) => {
+				if (a.factory !== b.factory) return a.factory.localeCompare(b.factory);
+				if (a.line !== b.line) return a.line.localeCompare(b.line);
+				if (a.soNo !== b.soNo) return (a.soNo || '').localeCompare(b.soNo || '');
+				return (a.subNo || '').localeCompare(b.subNo || '');
+			});
+
+			rows.forEach(g => {
+				// compute chosen delay status and so type for the group
+				const delayStatus = pickPriorityStatus(g.statusSet || new Set());
+				const soType = getSoType(g.soNo);
+
+				const attrs = soAttrs[g.soNo] || { EMBROIDERY:'', HEAT:'', PAD_PRINT:'', PRINT:'', BOND:'', LASER:'' };
+
+				// Determine Planned QTY (line) and Order QTY (use DC map if available)
+				const plannedQty = g.orderPlanSum;
+				const orderKey = `${g.soNo}||${g.subNo}||${g.line}`;
+				// DC now provides ORDER_QTY — prefer that for "Order QTY"
+				const orderQtyFromDc = (dcOrderQtyMap && dcOrderQtyMap[orderKey]) ? dcOrderQtyMap[orderKey] : null;
+				const orderQtyValue = orderQtyFromDc !== null ? orderQtyFromDc : Number(g.total || 0);
+
+				// Calculate variances relative to summed period values (g.total)
+				const summedPeriods = Number(g.total || 0);
+				const orderVariance = Number(orderQtyValue || 0) - summedPeriods;
+				const plannedVariance = Number(plannedQty || 0) - summedPeriods;
+
+				const rowArr = [];
+				// NOTE: columns: Order QTY, Planned QTY, then date meta, then Order Variance and Planned Variance
+				rowArr.push(
+					g.factory,
+					g.line,
+					g.soNo,
+					g.customer,
+					g.styleRef,
+					g.subNo,
+					delayStatus,
+					soType,
+					g.samIe,
+					orderQtyValue,         // Order QTY (prefer FR_IMPORT_DATA_CENTER.ORDER_QTY)
+					plannedQty             // Planned QTY
+				);
+				// date meta
+                rowArr.push(excelDate(g.earliestStartSew));
+                rowArr.push(excelDate(g.maxSew));
+                rowArr.push(excelDate(g.deliveryMin));
+                // Two variance columns: orderVariance, plannedVariance
+                rowArr.push(orderVariance);
+                rowArr.push(plannedVariance);
+				// Add SO-level attributes (strings)
+				rowArr.push(attrs.EMBROIDERY, attrs.HEAT, attrs.PAD_PRINT, attrs.PRINT, attrs.BOND, attrs.LASER);
+
+				// Finally push the period columns in the same order as dateHeaders
+				dateHeaders.forEach(periodKey => {
+					const v = g.periodSums[periodKey] || '';
+					rowArr.push(v === '' ? '' : Number(v));
+				});
+				wsData.push(rowArr);
+			});
+
+			// create sheet and apply date formatting to the three date meta columns
+			const ws = XLSX.utils.aoa_to_sheet(wsData);
+			// Find date metadata column indices by header names (safer)
+            const metaDateNames = ['Earliest Start SEW','Max End SEW','Delivery'];
+            const dateCols = {};
+            wsData[0].forEach((h, idx) => {
+                if (metaDateNames.includes(h)) dateCols[idx] = true;
+            });
+            for (let r = 1; r < wsData.length; r++) {
+                for (const col in dateCols) {
+                    const val = wsData[r][col];
+                    if (typeof val === 'number' && val > 0) {
+                        const cellRef = XLSX.utils.encode_cell({ r, c: parseInt(col) });
+                        ws[cellRef].t = 'n';
+                        ws[cellRef].z = 'dd-mm-yyyy';
+                    }
+                }
+            }
+
+			const wb = XLSX.utils.book_new();
+			XLSX.utils.book_append_sheet(wb, ws, "Summary");
+			XLSX.writeFile(wb, `Sewing_Plan_Summary_by_Sub_${todayStr}.xlsx`);
+			return;
+		}
+
+		// --- SUMMARY BY SO export (modal "summary_so" mode) ---
+		if (window._exportMode === 'summary_so') {
+			const { orderQtyMap, orderTotalBySo, dcOrderQtyMap, dcOrderTotalBySo, soAttrs } = buildOrderMaps(filteredData, dcData || []);
+
+			// helper functions reused from "summary" branch
+			function getStatus(delivery, sew) {
+				const dDate = new Date(delivery);
+				const sDate = new Date(sew);
+				if (isNaN(dDate) || isNaN(sDate)) return '';
+				const diff = Math.floor((dDate - sDate) / (1000 * 60 * 60 * 24));
+				if (diff < 0) return 'Delay';
+				if (diff <= 5 && diff >= 0) return 'Can be delay';
+				if (diff > 20) return 'Too early';
+				return 'Ok';
+			}
+			function getSoType(soNoDocVal) {
+				const digits = String(soNoDocVal || '').replace(/\D/g, '');
+				if (!digits) return '';
+				if (digits.length === 7 && /^[478]/.test(digits)) return 'Early';
+				if (digits.length === 7 && !/^[478]/.test(digits)) {
+					if (/^2/.test(digits)) return 'Sample';
+					return 'Bulk';
+				}
+				if (digits.length === 8) return 'Sample';
+				return '';
+			}
+
+			// Header: note Sub No removed; Line becomes "Lines" (distinct count)
+			const metaColsSo = [
+				'Factory','Lines','SO No','Customer','Style Ref',
+				'Delay Status','SO No Type','SAM','Order QTY','Planned QTY',
+				'Earliest Start SEW','Max End SEW','Delivery','Order Variance','Planned Variance',
+				'Embroidery','Heat','Pad Print','Print','Bond','Laser'
+			];
+			const headerRowSo = metaColsSo.concat(dateHeaders.map(d => formatDateHeader(d, groupBy)));
+			wsData.push(headerRowSo);
+
+			// group map keyed by Factory||SO (no sub)
+			const groupMapSo = {}; // key -> aggregated group
+			const byMinutesSo = (opts.byMinutes === 'Yes');
+
+			filteredData.forEach(row => {
+				const factory = row.FACTORY || row.factory || '';
+				const line = row.PROD_LINE || row.prod_line || '';
+				const soNo = row.SO_NO_DOC || row.so_no_doc || '';
+				const customer = row.CUSTOMER_NAME || row.customer_name || '';
+				const styleRef = row.STYLE_REF || row.style_ref || '';
+				const samIe = row.SAM_IE || row.sam_ie || '';
+				const sew = row.SEW_DATE || row.sew_date || '';
+				const delivery = row.DELIVERY_DATE || row.delivery_date || '';
+				const startSew = row.START_SEW || row.start_sew || '';
+				const pcs = Number(row.PLAN_PCS || row.plan_pcs) || 0;
+				const orderPlan = Number(row.ORDER_PLAN || row.order_plan) || 0;
+
+				const period = makePeriodKey(sew, groupBy);
+				const key = [factory, soNo].join('||'); // group by factory + SO only
+
+				if (!groupMapSo[key]) {
+					// SO-level order total from our built map
+					const soTotal = orderTotalBySo[soNo] || 0;
+					groupMapSo[key] = {
+						factory, soNo,
+						customer: customer || '',
+						styleRef: styleRef || '',
+						samIe: samIe || '',
+						orderTotal: soTotal,
+						// For "Order Plan" keep max seen (best-effort)
+						orderPlanSum: 0,
+						earliestStartSew: startSew && !isNaN(new Date(startSew)) ? startSew : '',
+						maxSew: sew || '',
+						deliveryMin: delivery || '',
+						periodSums: {},
+						total: 0,
+						linesSet: new Set(),
+						statusSet: new Set()
+					};
+				}
+				const g = groupMapSo[key];
+
+				// Track distinct lines
+				if (line) g.linesSet.add(line);
+				// Track max ORDER_PLAN seen
+				g.orderPlanSum = Math.max(g.orderPlanSum || 0, orderPlan || 0);
+
+				// update meta: pick earliest start, max sew, earliest delivery
+				if (startSew && !isNaN(new Date(startSew))) {
+					if (!g.earliestStartSew || new Date(startSew) < new Date(g.earliestStartSew)) g.earliestStartSew = startSew;
+				}
+				if (sew && (!g.maxSew || new Date(sew) > new Date(g.maxSew))) g.maxSew = sew;
+				if (delivery && (!g.deliveryMin || new Date(delivery) < new Date(g.deliveryMin))) g.deliveryMin = delivery;
+
+				// collect delay status
+				const rowStatus = getStatus(delivery, sew);
+				if (rowStatus) g.statusSet.add(rowStatus);
+
+				// aggregate period values
+				const val = byMinutesSo ? pcs * (Number(row.SAM_IE || row.sam_ie) || 0) : pcs;
+				if (!g.periodSums[period]) g.periodSums[period] = 0;
+				g.periodSums[period] += Number(val || 0);
+				g.total += Number(val || 0);
+			});
+
+			// Build rows sorted deterministically
+			const rowsSo = Object.values(groupMapSo).sort((a,b) => {
+				if (a.factory !== b.factory) return a.factory.localeCompare(b.factory);
+				return (a.soNo || '').localeCompare(b.soNo || '');
+			});
+
+			function pickPriorityStatus(statusSet) {
+				const priority = ['Delay','Can be delay','Too early','Ok'];
+				for (const p of priority) if (statusSet.has(p)) return p;
+				return '';
+			}
+
+			rowsSo.forEach(g => {
+				const delayStatus = pickPriorityStatus(g.statusSet || new Set());
+				const soType = getSoType(g.soNo);
+				const linesCount = g.linesSet ? g.linesSet.size : 0;
+				const rowArr = [];
+				// Prefer ORDER_QTY from FR_IMPORT_DATA_CENTER for Order QTY when available
+				const orderQtyFromDcSo = (dcOrderTotalBySo && dcOrderTotalBySo[g.soNo]) ? dcOrderTotalBySo[g.soNo] : null;
+				const orderQtySo = orderQtyFromDcSo !== null ? orderQtyFromDcSo : Number(g.total || 0);
+				// Planned (SO-level) quantity
+				const plannedQtySo = Number(g.orderTotal || 0);
+
+				// summed periods for this SO group
+				const summedPeriodsSo = Number(g.total || 0);
+
+				// Calculate variances
+				const orderVarianceSo = Number(orderQtySo || 0) - summedPeriodsSo;
+				const plannedVarianceSo = Number(plannedQtySo || 0) - summedPeriodsSo;
+
+				rowArr.push(
+					g.factory,
+					linesCount,
+					g.soNo,
+					g.customer,
+					g.styleRef,
+					delayStatus,
+					soType,
+					g.samIe,
+					orderQtySo,             // Order QTY (prefer FR_IMPORT_DATA_CENTER.ORDER_QTY)
+					g.orderTotal            // Planned QTY (SO-level from plan_head)
+				);
+
+				// date meta
+				rowArr.push(excelDate(g.earliestStartSew));
+				rowArr.push(excelDate(g.maxSew));
+				rowArr.push(excelDate(g.deliveryMin));
+				// Two variance columns: orderVarianceSo, plannedVarianceSo
+				rowArr.push(orderVarianceSo);
+				rowArr.push(plannedVarianceSo);
+				const attrs = soAttrs[g.soNo] || { EMBROIDERY:'', HEAT:'', PAD_PRINT:'', PRINT:'', BOND:'', LASER:'' };
+				rowArr.push(attrs.EMBROIDERY, attrs.HEAT, attrs.PAD_PRINT, attrs.PRINT, attrs.BOND, attrs.LASER);
+
+				// period columns
+				dateHeaders.forEach(periodKey => {
+					const v = g.periodSums[periodKey] || '';
+					rowArr.push(v === '' ? '' : Number(v));
+				});
+				wsData.push(rowArr);
+			});
+
+			// create sheet and apply date formatting to the three date meta columns
+			const ws = XLSX.utils.aoa_to_sheet(wsData);
+			const metaDateNames = ['Earliest Start SEW','Max End SEW','Delivery'];
+			const dateCols = {};
+			wsData[0].forEach((h, idx) => {
+				if (metaDateNames.includes(h)) dateCols[idx] = true;
+			});
+			for (let r = 1; r < wsData.length; r++) {
+				for (const col in dateCols) {
+					const val = wsData[r][col];
+					if (typeof val === 'number' && val > 0) {
+						const cellRef = XLSX.utils.encode_cell({ r, c: parseInt(col) });
+						ws[cellRef].t = 'n';
+						ws[cellRef].z = 'dd-mm-yyyy';
+					}
+				}
+			}
+			const wb = XLSX.utils.book_new();
+			XLSX.utils.book_append_sheet(wb, ws, "Summary_by_SO");
+			XLSX.writeFile(wb, `Sewing_Plan_Summary_by_SO_${todayStr}.xlsx`);
+			return;
+		}
+
+        // Second row: column headers (default "export current" behavior)
         const headerRow = ['Line/Group'].concat(dateHeaders.map(d => formatDateHeader(d, groupBy)));
         wsData.push(headerRow);
 
@@ -754,7 +1298,8 @@
         });
         const ws = XLSX.utils.aoa_to_sheet(wsData);
         // Set date columns to Excel date type
-        if (opts.byDelay === 'Yes') {
+        // Only apply this "delay-export" date formatting when the export modal explicitly requested delay mode.
+        if (window._exportMode === 'delay') {
             // Earliest Start SEW: col 8, Max End SEW: col 9, Delivery: col 10 (0-based)
             for (let i = 1; i < wsData.length; i++) {
                 for (const col of [9, 10, 11]) {
@@ -762,37 +1307,130 @@
                     if (typeof val === 'number' && val > 0) {
                         const cellRef = XLSX.utils.encode_cell({ r: i, c: col });
                         ws[cellRef].t = 'n'; // number
-                        ws[cellRef].z = 'yyyy-mm-dd';
+                        ws[cellRef].z = 'dd-mm-yyyy';
                     }
                 }
             }
         }
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "PivotTable");
-        XLSX.writeFile(wb, `Sewing_Plan_${todayStr}.xlsx`);
+        XLSX.writeFile(wb, `Sewing_Plan_by_Current_${todayStr}.xlsx`);
     }
     // --- Export button handler ---
     document.addEventListener('DOMContentLoaded', function() {
         const exportBtn = document.getElementById('exportExcelBtn');
         if (exportBtn) {
             exportBtn.addEventListener('click', function() {
-                // Gather current filter values
-                if (typeof getCurrentFilters !== 'function') {
-                    alert('Export not available: getCurrentFilters missing.');
-                    return;
+                const modal = document.getElementById('exportModeModal');
+                if (modal) {
+                    modal.style.display = 'flex';
+                } else {
+                    // fallback to direct export if modal missing
+                    if (typeof getCurrentFilters !== 'function') {
+                        alert('Export not available: getCurrentFilters missing.');
+                        return;
+                    }
+                    const filters = getCurrentFilters();
+                    const filteredData = window._lastFilteredData || [];
+                    const groupBy = window.groupBy || 'day';
+                    const dateHeaders = window._pivotTableDisplayDates || [];
+                    const table = document.getElementById('pivotTable');
+                    if (!table) {
+                        alert('No table to export.');
+                        return;
+                    }
+                    const rows = Array.from(table.querySelectorAll('tbody tr'));
+                    const tableData = rows.map(tr => {
+                        const tds = tr.querySelectorAll('td');
+                        if (!tds.length) return null;
+                        const rowLabel = tds[0].innerText.trim();
+                        const rowObj = { rowLabel };
+                        dateHeaders.forEach((date, i) => {
+                            rowObj[date] = tds[i + 1] ? tds[i + 1].innerText.trim() : '';
+                        });
+                        return rowObj;
+                    }).filter(Boolean);
+
+                    // Fetch DC data then export (graceful fallback to empty array)
+                    fetch('/api/dc_data')
+                        .then(res => res.ok ? res.json() : [])
+                        .catch(() => [])
+                        .then(dcData => {
+                            exportPivotTableToExcel({
+                                filteredData,
+                                groupBy,
+                                filters,
+                                tableData,
+                                dateHeaders,
+                                dcData
+                            });
+                        });
                 }
-                const filters = getCurrentFilters();
-                const filteredData = window._lastFilteredData || [];
-                const groupBy = window.groupBy || 'day';
-                const dateHeaders = window._pivotTableDisplayDates || [];
-                // Build tableData from rendered table
-                const table = document.getElementById('pivotTable');
-                if (!table) {
-                    alert('No table to export.');
-                    return;
-                }
+            });
+        }
+    });
+
+
+    // --- Export Mode Modal (added) ---
+    (function createExportModeModal(){
+        if (document.getElementById('exportModeModal')) return;
+        const modal = document.createElement('div');
+        modal.id = 'exportModeModal';
+        modal.className = 'modal-overlay';
+        modal.style.zIndex = '10002';
+        modal.innerHTML = `
+            <div class="modal-content" style="min-width:320px;max-width:420px;">
+                <div style="font-weight:bold;font-size:1.1em;margin-bottom:10px;">Export mode</div>
+                <form id="exportModeForm" style="display:flex;flex-direction:column;gap:8px;">
+                    <label><input type="radio" name="exportMode" value="current" checked> Export current (Visible Table)</label>
+                    <label><input type="radio" name="exportMode" value="summary"> Export summary (By Line, SO, Sub Group)</label>
+                    <label><input type="radio" name="exportMode" value="summary_so"> Export summary (By SO)</label>
+                    <label><input type="radio" name="exportMode" value="delay"> Export by delay (Summary by Delay Status)</label>
+                </form>
+                <div style="margin-top:14px;display:flex;justify-content:flex-end;gap:8px;">
+                    <button type="button" id="exportModeCancelBtn" style="background:#eee;color:#333;border:none;border-radius:6px;padding:8px 14px;">Cancel</button>
+                    <button type="button" id="exportModeConfirmBtn" style="background:#219a0b;color:#fff;border:none;border-radius:6px;padding:8px 14px;">Confirm</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+        // Close on outside click
+        modal.addEventListener('click', function(e){
+            if (e.target === modal) modal.style.display = 'none';
+        });
+        // Cancel button
+        document.getElementById('exportModeCancelBtn').addEventListener('click', function(){
+            modal.style.display = 'none';
+        });
+        // Confirm button - will trigger export with chosen mode
+        document.getElementById('exportModeConfirmBtn').addEventListener('click', function(){
+            const form = document.getElementById('exportModeForm');
+            const mode = Array.from(form.elements).find(el => el.name === 'exportMode' && el.checked)?.value || 'current';
+            // set temporary override for getExportOptionStates()
+            window._exportMode = mode;
+            // gather args then call exporter; clear mode only after export completes
+            if (typeof getCurrentFilters !== 'function') {
+                alert('Export not available: getCurrentFilters missing.');
+                modal.style.display = 'none';
+                window._exportMode = null;
+                return;
+            }
+            const filters = getCurrentFilters();
+            const filteredData = window._lastFilteredData || [];
+            const groupBy = window.groupBy || 'day';
+            const dateHeaders = window._pivotTableDisplayDates || [];
+            const table = document.getElementById('pivotTable');
+            if (!table && mode === 'current') {
+                alert('No table to export.');
+                modal.style.display = 'none';
+                window._exportMode = null;
+                return;
+            }
+            // Build tableData from rendered table (only needed for current/table export)
+            let tableData = [];
+            if (table) {
                 const rows = Array.from(table.querySelectorAll('tbody tr'));
-                const tableData = rows.map(tr => {
+                tableData = rows.map(tr => {
                     const tds = tr.querySelectorAll('td');
                     if (!tds.length) return null;
                     const rowLabel = tds[0].innerText.trim();
@@ -802,16 +1440,29 @@
                     });
                     return rowObj;
                 }).filter(Boolean);
-                exportPivotTableToExcel({
-                    filteredData,
-                    groupBy,
-                    filters,
-                    tableData,
-                    dateHeaders
+            }
+
+            // Fetch DC data then call exporter; ensure window._exportMode persists until export finishes
+            fetch('/api/dc_data')
+                .then(res => res.ok ? res.json() : [])
+                .catch(() => [])
+                .then(dcData => {
+                    exportPivotTableToExcel({
+                        filteredData,
+                        groupBy,
+                        filters,
+                        tableData,
+                        dateHeaders,
+                        dcData
+                    });
+                })
+                .finally(() => {
+                    // clear override after exporter is invoked
+                    setTimeout(() => { window._exportMode = null; }, 50);
+                    modal.style.display = 'none';
                 });
-            });
-        }
-    });
+        });
+    })();
     </script>
 </body>
 </html>

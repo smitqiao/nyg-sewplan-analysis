@@ -59,26 +59,24 @@ def get_plan_data():
         logging.error(f"Error fetching data: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route('/api/order_qty_map')
-def get_order_qty_map():
+@app.route('/api/dc_data')
+def get_dc_data():
     try:
         with conn.connect() as connection:
             result = connection.execute(text("""
-                SELECT SO_NO_DOC, SUB_NO, COLOR_FC, ORDER_QTY
+                SELECT
+                    SO_NO_DOC,
+                    SUB_NO,
+                    PROD_LINE,
+                    ORDER_QTY
                 FROM FR_IMPORT_DATA_CENTER
             """))
-            data = {}
-            for row in result.fetchall():
-                so_no_doc = str(row[0]).strip() if row[0] is not None else ''
-                sub_no = str(row[1]).strip() if row[1] is not None else ''
-                color_fc = str(row[2]).strip() if row[2] is not None else ''
-                order_qty = row[3]
-                key = f"{so_no_doc}||{sub_no}||{color_fc}"
-                data[key] = order_qty
-            logging.info(f"Fetched {len(data)} order_qty rows from FR_IMPORT_DATA_CENTER.")
+            columns = result.keys()
+            data = [dict(zip(columns, row)) for row in result.fetchall()]
+            logging.info(f"Fetched {len(data)} rows from data center.")
         return jsonify(data)
     except Exception as e:
-        logging.error(f"Error fetching order_qty: {e}")
+        logging.error(f"Error fetching dc data: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/')
@@ -90,7 +88,7 @@ def serve_static(filename):
     return send_from_directory('.', filename)
 
 if __name__ == '__main__':
-    app.run(debug=True,host='0.0.0.0', port=5010)
+    app.run(debug=True, host='0.0.0.0', port=5010)
 
 # if __name__ == '__main__':
 #     debug_mode = '--debug' in sys.argv
